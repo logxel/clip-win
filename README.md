@@ -175,6 +175,17 @@ Want to hack on the code?
 
 **Tech Stack:** `Rust` + `Tauri v2` + `React` + `Tailwind CSS` + `Linux`
 
+### Dev Container Setup
+
+This repository now includes a dev container for a consistent Linux Tauri environment.
+
+1. Install the VS Code Dev Containers extension.
+2. Open the repository in VS Code.
+3. Run `Dev Containers: Reopen in Container`.
+4. Wait for the post-create setup to install Rust tooling and npm dependencies.
+
+The container includes the Rust toolchain, Node.js 20, and the Linux libraries required to build and run the Tauri app.
+
 <div align="center">
   <a href="https://skillicons.dev">
     <img src="https://skillicons.dev/icons?i=rust,tauri,react,ts,tailwind,linux" />
