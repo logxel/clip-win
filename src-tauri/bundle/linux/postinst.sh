@@ -1,5 +1,5 @@
 #!/bin/bash
-# Post-installation script for win11-clipboard-history
+# Post-installation script for clip-win
 # Only system-level tasks. NON-INTERACTIVE.
 set -e
 

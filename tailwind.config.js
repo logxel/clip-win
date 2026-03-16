@@ -8,7 +8,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Windows 11 Dark Theme Colors
+        // Clip-Win Dark Theme Colors
         win11: {
           // Backgrounds
           'bg-primary': '#202020',
@@ -39,7 +39,7 @@ export default {
           'error': '#ff5f5f',
           'info': '#0078d4',
         },
-        // Light mode Windows 11 colors
+        // Light mode Clip-Win colors
         win11Light: {
           'bg-primary': '#f3f3f3',
           'bg-secondary': '#ffffff',

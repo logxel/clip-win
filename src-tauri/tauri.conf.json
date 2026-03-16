@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "win11-clipboard-history",
+  "productName": "clip-win",
   "version": "0.6.4",
-  "identifier": "dev.gustavosett.clipboard-history",
+  "identifier": "com.techlogycs.clip-win",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -83,8 +83,8 @@
       "icons/icon.png"
     ],
     "category": "Utility",
-    "shortDescription": "Windows 11-style Clipboard History Manager",
-    "longDescription": "A modern, beautiful clipboard history manager for Linux that mimics the Windows 11 Win+V clipboard experience. Built with Tauri, React, and Rust.",
+    "shortDescription": "Clip-Win History Manager",
+    "longDescription": "A modern, beautiful clipboard history manager for Linux that mimics the Clip-Win Win+V clipboard experience. Built with Tauri, React, and Rust.",
     "linux": {
       "deb": {
         "depends": [
@@ -99,12 +99,12 @@
           "libayatana-appindicator3-1 | libappindicator3-1"
         ],
         "files": {
-          "/usr/bin/win11-clipboard-history": "bundle/linux/wrapper.sh",
+          "/usr/bin/clip-win": "bundle/linux/wrapper.sh",
           "/etc/udev/rules.d/99-win11-clipboard-input.rules": "bundle/linux/99-win11-clipboard-input.rules",
-          "/usr/share/applications/win11-clipboard-history.desktop": "bundle/linux/win11-clipboard-history.desktop",
-          "/usr/share/icons/hicolor/128x128/apps/win11-clipboard-history.png": "icons/128x128.png",
-          "/usr/share/icons/hicolor/256x256/apps/win11-clipboard-history.png": "icons/icon.png",
-          "/usr/share/icons/hicolor/scalable/apps/win11-clipboard-history.svg": "icons/icon.svg"
+          "/usr/share/applications/clip-win.desktop": "bundle/linux/clip-win.desktop",
+          "/usr/share/icons/hicolor/128x128/apps/clip-win.png": "icons/128x128.png",
+          "/usr/share/icons/hicolor/256x256/apps/clip-win.png": "icons/icon.png",
+          "/usr/share/icons/hicolor/scalable/apps/clip-win.svg": "icons/icon.svg"
         },
         "postInstallScript": "bundle/linux/postinst.sh",
         "preRemoveScript": "bundle/linux/postrm.sh"

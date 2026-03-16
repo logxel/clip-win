@@ -136,7 +136,7 @@ jobs:
             ## 🚀 Quick Installation (Recommended)
 
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/gustavosett/Windows-11-Clipboard-History-For-Linux/master/scripts/install.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/techlogycs/clip-win/master/scripts/install.sh | bash
             ```
 
             This script auto-detects your distro and architecture, then sets up everything including paste permissions.
@@ -151,14 +151,14 @@ jobs:
             <summary>Ubuntu/Debian (APT Repository - enables auto-updates)</summary>
 
             ```bash
-            curl -1sLf 'https://dl.cloudsmith.io/public/gustavosett/clipboard-manager/setup.deb.sh' | sudo -E bash
-            sudo apt update && sudo apt install win11-clipboard-history
+            curl -1sLf 'https://dl.cloudsmith.io/public/techlogycs/clipboard-manager/setup.deb.sh' | sudo -E bash
+            sudo apt update && sudo apt install clip-win
             sudo setfacl -m u:$USER:rw /dev/uinput  # For immediate paste access
             ```
 
             Or download the `.deb` directly (amd64 for x86_64, arm64 for ARM64):
             ```bash
-            sudo apt install ./win11-clipboard-history_${{ steps.get_version.outputs.VERSION }}_amd64.deb
+            sudo apt install ./clip-win_${{ steps.get_version.outputs.VERSION }}_amd64.deb
             sudo setfacl -m u:$USER:rw /dev/uinput
             ```
             </details>
@@ -167,14 +167,14 @@ jobs:
             <summary>Fedora/RHEL (DNF Repository - enables auto-updates)</summary
 
             ```bash
-            curl -1sLf 'https://dl.cloudsmith.io/public/gustavosett/clipboard-manager/setup.rpm.sh' | sudo -E bash
-            sudo dnf install win11-clipboard-history
+            curl -1sLf 'https://dl.cloudsmith.io/public/techlogycs/clipboard-manager/setup.rpm.sh' | sudo -E bash
+            sudo dnf install clip-win
             sudo setfacl -m u:$USER:rw /dev/uinput  # For immediate paste access
             ```
 
             Or download the `.rpm` directly (x86_64 for Intel/AMD, aarch64 for ARM64):
             ```bash
-            sudo dnf install ./win11-clipboard-history-${{ steps.get_version.outputs.VERSION }}-1.x86_64.rpm
+            sudo dnf install ./clip-win-${{ steps.get_version.outputs.VERSION }}-1.x86_64.rpm
             sudo setfacl -m u:$USER:rw /dev/uinput
             ```
             </details>
@@ -183,7 +183,7 @@ jobs:
             <summary>Arch Linux (AUR)</summary>
 
             ```bash
-            yay -S win11-clipboard-history-bin
+            yay -S clip-win-bin
             ```
             </details>
 
@@ -193,16 +193,16 @@ jobs:
             > ## Some features are disabled; we strongly recommend the complete installation.
             ```bash
             # Download the correct AppImage for your architecture
-            chmod +x win11-clipboard-history_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage
+            chmod +x clip-win_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage
             sudo setfacl -m u:$USER:rw /dev/uinput  # Required for paste simulation
-            ./win11-clipboard-history_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage
+            ./clip-win_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage
             ```
             then register the command that you want in your system to open the AppImage
             ```
-            KEYBOARD SETTINGS -> SHORTCUTS -> NEW SHORTCUT -> Super+V -> ./my_awesome_folder/win11-clipboard-history_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage
+            KEYBOARD SETTINGS -> SHORTCUTS -> NEW SHORTCUT -> Super+V -> ./my_awesome_folder/clip-win_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage
             ```
 
-            > **Note:** The `setfacl` command is temporary (resets on reboot). For permanent setup, see the [README](https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux#appimage-universal).
+            > **Note:** The `setfacl` command is temporary (resets on reboot). For permanent setup, see the [README](https://github.com/techlogycs/clip-win#appimage-universal).
             </details>
 
             ---
@@ -233,7 +233,7 @@ jobs:
           if [ -n "$deb_files" ]; then
             echo "$deb_files" | while read -r deb; do
               echo "Uploading $deb..."
-              cloudsmith push deb gustavosett/clipboard-manager/any-distro/any-version \
+              cloudsmith push deb techlogycs/clipboard-manager/any-distro/any-version \
                 "$deb" --api-key $CLOUDSMITH_API_KEY || echo "Cloudsmith .deb upload failed for $deb (may already exist)"
             done
           else
@@ -245,7 +245,7 @@ jobs:
           if [ -n "$rpm_files" ]; then
             echo "$rpm_files" | while read -r rpm; do
               echo "Uploading $rpm..."
-              cloudsmith push rpm gustavosett/clipboard-manager/any-distro/any-version \
+              cloudsmith push rpm techlogycs/clipboard-manager/any-distro/any-version \
                 "$rpm" --api-key $CLOUDSMITH_API_KEY || echo "Cloudsmith .rpm upload failed for $rpm (may already exist)"
             done
           else
@@ -294,12 +294,12 @@ jobs:
             StrictHostKeyChecking no" > ~/.ssh/config
 
           # Clone AUR repo
-          git clone ssh://aur@aur.archlinux.org/win11-clipboard-history-bin.git /tmp/aur-pkg
+          git clone ssh://aur@aur.archlinux.org/clip-win-bin.git /tmp/aur-pkg
           cd /tmp/aur-pkg
 
           # Use aur/PKGBUILD from the repo as the single source of truth
           cp "$GITHUB_WORKSPACE/aur/PKGBUILD" PKGBUILD
-          cp "$GITHUB_WORKSPACE/aur/win11-clipboard-history-bin.install" . 2>/dev/null || true
+          cp "$GITHUB_WORKSPACE/aur/clip-win-bin.install" . 2>/dev/null || true
 
           # Update version and checksums via sed
           sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
@@ -320,12 +320,12 @@ jobs:
             echo "Docker failed, generating .SRCINFO manually"
             TAB=$'\t'
             cat > .SRCINFO << SRCINFO_EOF
-          pkgbase = win11-clipboard-history-bin
-          ${TAB}pkgdesc = Windows 11-style Clipboard History Manager for Linux
+          pkgbase = clip-win-bin
+          ${TAB}pkgdesc = Clip-Win History Manager for Linux
           ${TAB}pkgver = $VERSION
           ${TAB}pkgrel = 1
-          ${TAB}url = https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux
-          ${TAB}install = win11-clipboard-history-bin.install
+          ${TAB}url = https://github.com/techlogycs/clip-win
+          ${TAB}install = clip-win-bin.install
           ${TAB}arch = x86_64
           ${TAB}arch = aarch64
           ${TAB}license = MIT
@@ -338,16 +338,16 @@ jobs:
           ${TAB}depends = acl
           ${TAB}depends = polkit
           ${TAB}optdepends = libappindicator-gtk3: Legacy tray icon support
-          ${TAB}provides = win11-clipboard-history
-          ${TAB}conflicts = win11-clipboard-history
+          ${TAB}provides = clip-win
+          ${TAB}conflicts = clip-win
           ${TAB}options = !strip
           ${TAB}options = !debug
-          ${TAB}source_x86_64 = https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux/releases/download/v$VERSION/win11-clipboard-history_${VERSION}_amd64.deb
+          ${TAB}source_x86_64 = https://github.com/techlogycs/clip-win/releases/download/v$VERSION/clip-win_${VERSION}_amd64.deb
           ${TAB}sha256sums_x86_64 = $SHA256_X86_64
-          ${TAB}source_aarch64 = https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux/releases/download/v$VERSION/win11-clipboard-history_${VERSION}_arm64.deb
+          ${TAB}source_aarch64 = https://github.com/techlogycs/clip-win/releases/download/v$VERSION/clip-win_${VERSION}_arm64.deb
           ${TAB}sha256sums_aarch64 = ${SHA256_ARM64:-SKIP}
 
-          pkgname = win11-clipboard-history-bin
+          pkgname = clip-win-bin
           SRCINFO_EOF
             sed -i 's/^          //' .SRCINFO
           }
