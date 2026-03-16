@@ -1,4 +1,4 @@
-# Windows 11 Clipboard History For Linux - Makefile
+# Clip-Win History For Linux - Makefile
 # Cross-distro build and install for Ubuntu, Debian, Fedora, and Arch Linux
 #
 # Note: PREFIX defaults to /usr/local for manual installs (Linux convention).
@@ -6,7 +6,7 @@
 #       To install system-wide like a package: sudo make install PREFIX=/usr
 
 SHELL := /bin/bash
-APP_NAME := win11-clipboard-history
+APP_NAME := clip-win
 PREFIX ?= /usr/local
 LIBDIR := $(PREFIX)/lib
 BINDIR := $(PREFIX)/bin
@@ -49,7 +49,7 @@ endif
 
 help:
 	@echo -e "$(CYAN)╔════════════════════════════════════════════════════════════════╗$(RESET)"
-	@echo -e "$(CYAN)║     Windows 11 Clipboard History For Linux - Build Commands                   ║$(RESET)"
+	@echo -e "$(CYAN)║     Clip-Win History For Linux - Build Commands                   ║$(RESET)"
 	@echo -e "$(CYAN)╚════════════════════════════════════════════════════════════════╝$(RESET)"
 	@echo ""
 	@echo -e "$(GREEN)Setup:$(RESET)"
@@ -354,7 +354,7 @@ format:
 
 clean-first-run:
 	@echo -e "$(CYAN)Cleaning first-run config...$(RESET)"
-	@rm -f ~/.config/win11-clipboard-history/setup.json
+	@rm -f ~/.config/clip-win/setup.json
 	@echo -e "$(GREEN)✓ First-run config cleaned (Setup Wizard will show on next launch)$(RESET)"
 
 clean: clean-first-run

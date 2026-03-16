@@ -1,20 +1,20 @@
 {
-  "name": "win11-clipboard-history",
+  "name": "clip-win",
   "private": true,
   "version": "0.6.4",
   "type": "module",
-  "description": "A Windows 11-style Clipboard History Manager for Linux built with Tauri",
+  "description": "A Clip-Win History Manager for Linux built with Tauri",
   "author": "gustavosett",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux"
+    "url": "https://github.com/techlogycs/clip-win"
   },
   "keywords": [
     "clipboard",
     "linux",
     "tauri",
-    "windows-11",
+    "clip-win",
     "clipboard-manager",
     "rust"
   ],

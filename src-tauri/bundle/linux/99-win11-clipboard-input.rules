@@ -1,4 +1,4 @@
-# udev rules for Windows 11 Clipboard History
+# udev rules for Clip-Win Clipboard History
 # Allows non-root access to uinput for keyboard simulation (paste)
 
 # Load module automatically

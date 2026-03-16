@@ -61,7 +61,7 @@ body {
   user-select: none;
 }
 
-/* Custom scrollbar for Windows 11 style */
+/* Custom scrollbar for Clip-Win style */
 @layer components {
   .scrollbar-win11 {
     scrollbar-width: thin;

@@ -1,14 +1,14 @@
 #!/bin/bash
-# Wrapper for win11-clipboard-history
+# Wrapper for clip-win
 # Purpose: Clean environment to avoid Snap/Flatpak library conflicts
 #          and force X11/XWayland for window positioning on Wayland
 
 set -e
 
 BINARY_LOCATIONS=(
-    "/usr/bin/win11-clipboard-history-bin"
-    "/usr/lib/win11-clipboard-history/win11-clipboard-history-bin"
-    "/usr/local/lib/win11-clipboard-history/win11-clipboard-history-bin"
+    "/usr/bin/clip-win-bin"
+    "/usr/lib/clip-win/clip-win-bin"
+    "/usr/local/lib/clip-win/clip-win-bin"
 )
 
 # Find the binary
@@ -22,7 +22,7 @@ done
 
 # Verify binary was found
 if [ -z "$BINARY" ]; then
-    echo "Error: win11-clipboard-history binary not found." >&2
+    echo "Error: clip-win binary not found." >&2
     echo "The wrapper searched for an executable in the following locations (in order):" >&2
     for loc in "${BINARY_LOCATIONS[@]}"; do
         echo "  - $loc" >&2

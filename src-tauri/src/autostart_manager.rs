@@ -12,9 +12,9 @@ Type=Application
 Version=1.1
 Name=Clipboard History
 GenericName=Clipboard Manager
-Comment=Windows 11-style Clipboard History Manager
+Comment=Clip-Win History Manager
 Exec=sh -c "sleep 5 && 'EXEC_PATH' --background"
-Icon=win11-clipboard-history
+Icon=clip-win
 Terminal=false
 Categories=Utility;
 StartupNotify=false
@@ -28,7 +28,7 @@ fn get_autostart_dir() -> Option<PathBuf> {
 
 /// Get the path to the autostart desktop file
 fn get_autostart_file() -> Option<PathBuf> {
-    get_autostart_dir().map(|p| p.join("win11-clipboard-history.desktop"))
+    get_autostart_dir().map(|p| p.join("clip-win.desktop"))
 }
 
 /// Read the content of the autostart desktop file
@@ -41,10 +41,10 @@ fn read_autostart_content() -> Option<String> {
 fn get_exec_path() -> String {
     // Priority order for the wrapper/binary
     let possible_paths = [
-        "/usr/bin/win11-clipboard-history", // Wrapper installed by .deb/.rpm
-        "/usr/local/bin/win11-clipboard-history", // Manual install with PREFIX=/usr/local
-        "/usr/bin/win11-clipboard-history-bin", // Direct binary (fallback)
-        "/usr/local/bin/win11-clipboard-history-bin", // Direct binary local (fallback)
+        "/usr/bin/clip-win", // Wrapper installed by .deb/.rpm
+        "/usr/local/bin/clip-win", // Manual install with PREFIX=/usr/local
+        "/usr/bin/clip-win-bin", // Direct binary (fallback)
+        "/usr/local/bin/clip-win-bin", // Direct binary local (fallback)
     ];
 
     for path in &possible_paths {
@@ -56,7 +56,7 @@ fn get_exec_path() -> String {
     // Last resort: use current executable
     std::env::current_exe()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "win11-clipboard-history".to_string())
+        .unwrap_or_else(|_| "clip-win".to_string())
 }
 
 /// Enable autostart by creating a .desktop file in ~/.config/autostart/
@@ -141,7 +141,7 @@ pub fn autostart_migrate() -> Result<bool, String> {
     let uses_old_binary = content
         .lines()
         .find(|line| line.trim_start().starts_with("Exec="))
-        .is_some_and(|line| line.contains("win11-clipboard-history-bin"));
+        .is_some_and(|line| line.contains("clip-win-bin"));
 
     // Check if the Exec= line is missing the sleep (for multi-distro compatibility)
     // We use sleep in exec instead of X-GNOME-Autostart-Delay for better compatibility

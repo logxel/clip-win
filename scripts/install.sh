@@ -1,6 +1,6 @@
 #!/bin/bash
 # install.sh - Smart installer for Win11 Clipboard History
-# Usage: curl -fsSL https://raw.githubusercontent.com/gustavosett/Windows-11-Clipboard-History-For-Linux/master/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/techlogycs/clip-win/master/scripts/install.sh | bash
 
 set -e
 
@@ -17,18 +17,18 @@ warn()    { echo -e "${YELLOW}[!]${NC} $1"; }
 error()   { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 
 # Configuration
-REPO_OWNER="gustavosett"
-REPO_NAME="Windows-11-Clipboard-History-For-Linux"
-CLOUDSMITH_REPO="gustavosett/clipboard-manager"
+REPO_OWNER="techlogycs"
+REPO_NAME="clip-win"
+CLOUDSMITH_REPO="techlogycs/clipboard-manager"
 
 # Cleanup previous AppImage installation (prevents conflicts with package manager installs)
 cleanup_appimage_installation() {
     local has_appimage=false
     
     # Check for AppImage installation artifacts
-    if [ -f "$HOME/.local/bin/win11-clipboard-history.AppImage" ] || \
-       [ -f "$HOME/.local/bin/win11-clipboard-history" ] || \
-       [ -f "$HOME/.local/share/applications/win11-clipboard-history.desktop" ]; then
+    if [ -f "$HOME/.local/bin/clip-win.AppImage" ] || \
+       [ -f "$HOME/.local/bin/clip-win" ] || \
+       [ -f "$HOME/.local/share/applications/clip-win.desktop" ]; then
         has_appimage=true
     fi
     
@@ -36,13 +36,13 @@ cleanup_appimage_installation() {
         log "Detected previous AppImage installation. Cleaning up..."
         
         # Kill any running AppImage instances
-        pkill -f "win11-clipboard-history.AppImage" 2>/dev/null || true
+        pkill -f "clip-win.AppImage" 2>/dev/null || true
 
         # Wait for processes to terminate, with a timeout
         timeout=5
         interval=1
         elapsed=0
-        while pgrep -f "win11-clipboard-history.AppImage" >/dev/null 2>&1; do
+        while pgrep -f "clip-win.AppImage" >/dev/null 2>&1; do
             if [ "$elapsed" -ge "$timeout" ]; then
                 warn "Timed out waiting for Win11 Clipboard History AppImage processes to terminate."
                 break
@@ -52,10 +52,10 @@ cleanup_appimage_installation() {
         done
         
         # Remove AppImage files
-        rm -f "$HOME/.local/bin/win11-clipboard-history.AppImage" 2>/dev/null || true
-        rm -f "$HOME/.local/bin/win11-clipboard-history" 2>/dev/null || true
-        rm -f "$HOME/.local/share/applications/win11-clipboard-history.desktop" 2>/dev/null || true
-        rm -f "$HOME/.local/share/icons/hicolor"/*/apps/win11-clipboard-history.png 2>/dev/null || true
+        rm -f "$HOME/.local/bin/clip-win.AppImage" 2>/dev/null || true
+        rm -f "$HOME/.local/bin/clip-win" 2>/dev/null || true
+        rm -f "$HOME/.local/share/applications/clip-win.desktop" 2>/dev/null || true
+        rm -f "$HOME/.local/share/icons/hicolor"/*/apps/clip-win.png 2>/dev/null || true
         
         # Update desktop database if available
         if command -v update-desktop-database &>/dev/null; then
@@ -182,9 +182,9 @@ install_deb() {
     
     # Try Cloudsmith repository first (enables auto-updates)
     if curl -1sLf "https://dl.cloudsmith.io/public/${CLOUDSMITH_REPO}/setup.deb.sh" | sudo -E bash 2>/dev/null; then
-        log "Installing win11-clipboard-history from repository..."
+        log "Installing clip-win from repository..."
         sudo apt-get update -qq
-        if sudo apt-get install -y win11-clipboard-history; then
+        if sudo apt-get install -y clip-win; then
             success "Installed via APT repository! (auto-updates enabled)"
             return 0
         fi
@@ -204,7 +204,7 @@ install_deb() {
     cd "$TEMP_DIR"
     trap 'rm -rf "$TEMP_DIR"' EXIT
     
-    FILE="win11-clipboard-history_${CLEAN_VERSION}_${DEB_ARCH}.deb"
+    FILE="clip-win_${CLEAN_VERSION}_${DEB_ARCH}.deb"
     BASE_URL="https://github.com/$REPO_OWNER/$REPO_NAME/releases/download/$RELEASE_TAG"
     
     log "Downloading $FILE..."
@@ -255,8 +255,8 @@ install_rpm() {
     fi
     
     if [ "$repo_setup_success" = true ]; then
-        log "Installing win11-clipboard-history from repository..."
-        if sudo dnf install -y win11-clipboard-history; then
+        log "Installing clip-win from repository..."
+        if sudo dnf install -y clip-win; then
             success "Installed via DNF repository! (auto-updates enabled)"
             return 0
         fi
@@ -276,7 +276,7 @@ install_rpm() {
     cd "$TEMP_DIR"
     trap 'rm -rf "$TEMP_DIR"' EXIT
     
-    FILE="win11-clipboard-history-${CLEAN_VERSION}-1.${RPM_ARCH}.rpm"
+    FILE="clip-win-${CLEAN_VERSION}-1.${RPM_ARCH}.rpm"
     BASE_URL="https://github.com/$REPO_OWNER/$REPO_NAME/releases/download/$RELEASE_TAG"
     
     log "Downloading $FILE..."
@@ -299,8 +299,8 @@ install_rpm_suse() {
     
     # Try Cloudsmith repository first (enables auto-updates)
     if curl -1sLf "https://dl.cloudsmith.io/public/${CLOUDSMITH_REPO}/setup.rpm.sh" | sudo -E bash 2>/dev/null; then
-        log "Installing win11-clipboard-history from repository..."
-        if sudo zypper install -y win11-clipboard-history; then
+        log "Installing clip-win from repository..."
+        if sudo zypper install -y clip-win; then
             success "Installed via Zypper repository! (auto-updates enabled)"
             return 0
         fi
@@ -320,7 +320,7 @@ install_rpm_suse() {
     cd "$TEMP_DIR"
     trap 'rm -rf "$TEMP_DIR"' EXIT
     
-    FILE="win11-clipboard-history-${CLEAN_VERSION}-1.${RPM_ARCH}.rpm"
+    FILE="clip-win-${CLEAN_VERSION}-1.${RPM_ARCH}.rpm"
     BASE_URL="https://github.com/$REPO_OWNER/$REPO_NAME/releases/download/$RELEASE_TAG"
     
     log "Downloading $FILE..."
@@ -343,15 +343,15 @@ install_aur() {
     
     # Detect AUR helper
     if command -v yay &>/dev/null; then
-        yay -S --noconfirm win11-clipboard-history-bin
+        yay -S --noconfirm clip-win-bin
     elif command -v paru &>/dev/null; then
-        paru -S --noconfirm win11-clipboard-history-bin
+        paru -S --noconfirm clip-win-bin
     else
         warn "No AUR helper found. Installing yay first..."
         sudo pacman -S --needed --noconfirm git base-devel
         git clone https://aur.archlinux.org/yay-bin.git /tmp/yay-bin
         cd /tmp/yay-bin && makepkg -si --noconfirm
-        yay -S --noconfirm win11-clipboard-history-bin
+        yay -S --noconfirm clip-win-bin
     fi
     
     success "Installed via AUR!"
@@ -389,18 +389,18 @@ install_appimage() {
     
     # Download AppImage
     log "Downloading AppImage..."
-    curl -fsSL -o "$HOME/.local/bin/win11-clipboard-history.AppImage" "$LATEST_URL"
-    chmod +x "$HOME/.local/bin/win11-clipboard-history.AppImage"
+    curl -fsSL -o "$HOME/.local/bin/clip-win.AppImage" "$LATEST_URL"
+    chmod +x "$HOME/.local/bin/clip-win.AppImage"
     
     # Download app icon for proper menu integration
     log "Downloading app icon..."
-    curl -fsSL -o "$HOME/.local/share/icons/hicolor/128x128/apps/win11-clipboard-history.png" \
+    curl -fsSL -o "$HOME/.local/share/icons/hicolor/128x128/apps/clip-win.png" \
         "https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/master/src-tauri/icons/128x128.png" 2>/dev/null || true
     
     # Wrapper script — mirrors src-tauri/bundle/linux/wrapper.sh sanitization
-    cat > "$HOME/.local/bin/win11-clipboard-history" << 'WRAPPER_EOF'
+    cat > "$HOME/.local/bin/clip-win" << 'WRAPPER_EOF'
 #!/bin/bash
-# AppImage wrapper for win11-clipboard-history
+# AppImage wrapper for clip-win
 # Sanitizes Snap/Flatpak environment leaks, then launches the AppImage.
 
 # Always clear library/runtime overrides from sandbox parents
@@ -441,21 +441,21 @@ sanitize_xdg_data_dirs
 
 export NO_AT_BRIDGE=1
 
-exec "$HOME/.local/bin/win11-clipboard-history.AppImage" "$@"
+exec "$HOME/.local/bin/clip-win.AppImage" "$@"
 WRAPPER_EOF
-    chmod +x "$HOME/.local/bin/win11-clipboard-history"
+    chmod +x "$HOME/.local/bin/clip-win"
     
     # .desktop file with proper icon
-    cat > "$HOME/.local/share/applications/win11-clipboard-history.desktop" << EOF
+    cat > "$HOME/.local/share/applications/clip-win.desktop" << EOF
 [Desktop Entry]
 Type=Application
 Name=Clipboard History
-Comment=Windows 11-style Clipboard History Manager
-Exec=$HOME/.local/bin/win11-clipboard-history
-Icon=win11-clipboard-history
+Comment=Clip-Win History Manager
+Exec=$HOME/.local/bin/clip-win
+Icon=clip-win
 Terminal=false
 Categories=Utility;
-StartupWMClass=win11-clipboard-history
+StartupWMClass=clip-win
 EOF
     
     # Ask about udev rules for AppImage (optional - maintains portability)
@@ -504,7 +504,7 @@ setup_udev_appimage() {
     
     # Create udev rule
     sudo tee /etc/udev/rules.d/99-win11-clipboard-input.rules > /dev/null << 'EOF'
-# udev rules for Windows 11 Clipboard History
+# udev rules for Clip-Win Clipboard History
 ACTION=="add", SUBSYSTEM=="misc", KERNEL=="uinput", OPTIONS+="static_node=uinput"
 KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", TAG+="uaccess"
 EOF
@@ -530,16 +530,16 @@ launch_app() {
     log "Starting application..."
     
     # Kill any existing instances (matches both wrapper and -bin binary)
-    pkill -f "win11-clipboard-history-bin" 2>/dev/null || true
-    pkill -f "win11-clipboard-history.AppImage" 2>/dev/null || true
+    pkill -f "clip-win-bin" 2>/dev/null || true
+    pkill -f "clip-win.AppImage" 2>/dev/null || true
     sleep 1
     
     # Launch detached from terminal
-    nohup win11-clipboard-history >/dev/null 2>&1 < /dev/null & disown
+    nohup clip-win >/dev/null 2>&1 < /dev/null & disown
     
     sleep 2
     
-    if pgrep -f "win11-clipboard-history" > /dev/null; then
+    if pgrep -f "clip-win" > /dev/null; then
         return 0
     else
         return 1
@@ -587,7 +587,7 @@ main() {
         echo ""
         success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         success " Installation complete!"
-        success " Run 'win11-clipboard-history' or find it in your menu."
+        success " Run 'clip-win' or find it in your menu."
         success " Press Super+V to open your clipboard history."
         success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     fi
