@@ -206,12 +206,7 @@ async fn paste_text(
     {
         let mut manager = state.clipboard_manager.lock();
         manager.mark_text_as_pasted(&text);
-
-        use arboard::Clipboard;
-        Clipboard::new()
-            .map_err(|e| e.to_string())?
-            .set_text(&text)
-            .map_err(|e| e.to_string())?;
+        manager.set_text_robust(&text)?;
     }
 
     // 3. Simulate Paste

@@ -1,6 +1,6 @@
 [package]
 name = "clip-win"
-version = "0.6.4"
+version = "0.6.5"
 description = "A Clip-Win History Manager for Linux"
 authors = ["gustavosett"]
 license = "MIT"

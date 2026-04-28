@@ -20,6 +20,7 @@ pub const DEFAULT_MAX_HISTORY_SIZE: usize = 50;
 const PREVIEW_TEXT_MAX_LEN: usize = 100;
 const GIF_CACHE_MARKER: &str = "clip-win/gifs/";
 const FILE_URI_PREFIX: &str = "file://";
+const WL_COPY_SETTLE_TIME: u64 = 150;
 
 // --- Helper Functions ---
 
@@ -618,7 +619,7 @@ impl ClipboardManager {
                 self.last_pasted_text = Some(text.clone());
                 self.last_pasted_image_hash = None;
             }
-            ClipboardContent::RichText { plain, .. } => {
+            ClipboardContent::RichText { plain, html: _ } => {
                 self.last_pasted_text = Some(plain.clone());
                 self.last_pasted_image_hash = None;
             }
@@ -643,23 +644,20 @@ impl ClipboardManager {
         self.mark_as_pasted(item);
 
         // 2. Write content to OS clipboard
-        let mut clipboard = get_system_clipboard()?;
-
         match &item.content {
             ClipboardContent::Text(text) => {
-                clipboard.set_text(text).map_err(|e| e.to_string())?;
+                self.set_text_robust(text)?;
             }
             ClipboardContent::RichText { plain, html } => {
                 // Set HTML with plain text as fallback - this preserves formatting
-                clipboard
-                    .set_html(html, Some(plain))
-                    .map_err(|e| e.to_string())?;
+                self.set_html_robust(html, plain)?;
             }
             ClipboardContent::Image {
                 base64,
                 width,
                 height,
             } => {
+                let mut clipboard = get_system_clipboard()?;
                 self.write_image_to_clipboard(&mut clipboard, base64, *width, *height)?;
             }
         }
@@ -707,5 +705,113 @@ impl ClipboardManager {
         thread::sleep(Duration::from_millis(250));
 
         Ok(())
+    }
+
+    /// Robustly set text to clipboard using xclip/wl-copy on Linux if available,
+    /// falling back to arboard. This fixes issues on distros like Kali Linux.
+    pub fn set_text_robust(&self, text: &str) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        {
+            if crate::session::is_wayland() {
+                if let Ok(()) = self.set_clipboard_external(
+                    "wl-copy",
+                    &["--type", "text/plain;charset=utf-8"],
+                    text,
+                ) {
+                    return Ok(());
+                }
+            } else {
+                if let Ok(()) = self.set_clipboard_external(
+                    "xclip",
+                    &["-selection", "clipboard", "-t", "UTF8_STRING"],
+                    text,
+                ) {
+                    return Ok(());
+                }
+            }
+        }
+
+        // Fallback to arboard
+        let mut clipboard = get_system_clipboard()?;
+        clipboard.set_text(text).map_err(|e| e.to_string())
+    }
+
+    /// Robustly set HTML to clipboard using xclip/wl-copy on Linux if available,
+    /// falling back to arboard.
+    pub fn set_html_robust(&self, html: &str, plain: &str) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        {
+            if crate::session::is_wayland() {
+                if let Ok(()) =
+                    self.set_clipboard_external("wl-copy", &["--type", "text/html"], html)
+                {
+                    let _ = self.set_text_robust(plain);
+                    return Ok(());
+                }
+            } else {
+                if let Ok(()) = self.set_clipboard_external(
+                    "xclip",
+                    &["-selection", "clipboard", "-t", "text/html"],
+                    html,
+                ) {
+                    let _ = self.set_text_robust(plain);
+                    return Ok(());
+                }
+            }
+        }
+
+        // Fallback to arboard (which handles multiple MIME types correctly)
+        let mut clipboard = get_system_clipboard()?;
+        clipboard
+            .set_html(html, Some(plain))
+            .map_err(|e| e.to_string())
+    }
+
+    fn set_clipboard_external(&self, cmd: &str, args: &[&str], data: &str) -> Result<(), String> {
+        use std::io::{Read, Write};
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new(cmd)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn {}: {}", cmd, e))?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(data.as_bytes())
+                .map_err(|e| format!("Pipe write error: {}", e))?;
+        }
+
+        // Wait briefly to see if it crashed
+        thread::sleep(Duration::from_millis(WL_COPY_SETTLE_TIME));
+
+        match child.try_wait() {
+            Ok(Some(status)) if !status.success() => {
+                let mut stderr = String::new();
+                if let Some(mut stderr_pipe) = child.stderr.take() {
+                    let _ = stderr_pipe.read_to_string(&mut stderr);
+                }
+                Err(format!(
+                    "{} exited with status {}. Stderr: {}",
+                    cmd,
+                    status,
+                    stderr.trim()
+                ))
+            }
+            Ok(_) => {
+                // If it's still running or exited successfully, we assume it worked.
+                // For xclip/wl-copy, they often background themselves or stay alive to serve content.
+                if cmd == "xclip" {
+                    thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                }
+                Ok(())
+            }
+            Err(e) => Err(format!("Process status check failed: {}", e)),
+        }
     }
 }
