@@ -1,19 +1,19 @@
 [package]
-name = "win11-clipboard-history-lib"
+name = "clip-win"
 version = "0.6.5"
-description = "A Windows 11-style Clipboard History Manager for Linux"
+description = "A Clip-Win History Manager for Linux"
 authors = ["gustavosett"]
 license = "MIT"
-repository = "https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux"
+repository = "https://github.com/techlogycs/clip-win"
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "win11_clipboard_history_lib"
+name = "clip_win"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "win11-clipboard-history-bin"
+name = "clip-win-bin"
 path = "src/main.rs"
 
 [build-dependencies]

@@ -150,11 +150,11 @@ pub struct UserSettingsManager {
 
 impl UserSettingsManager {
     /// Creates a new UserSettingsManager
-    /// Uses the OS-appropriate config directory (e.g., ~/.config/win11-clipboard-history/)
+    /// Uses the OS-appropriate config directory (e.g., ~/.config/clip-win/)
     pub fn new() -> Self {
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("win11-clipboard-history");
+            .join("clip-win");
 
         Self { config_dir }
     }
