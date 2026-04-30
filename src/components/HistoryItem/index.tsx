@@ -11,6 +11,7 @@ import { getIconSize, getIconContainerClasses } from './_HistoryItemUtils'
 interface HistoryItemProps {
   item: ClipboardItem
   onPaste: (id: string) => void
+  onPasteTextMode: (id: string) => void
   onDelete: (id: string) => void
   onTogglePin: (id: string) => void
   onFocus?: () => void
@@ -28,6 +29,7 @@ export const HistoryItem = forwardRef<HTMLDivElement, HistoryItemProps>(function
   {
     item,
     onPaste,
+    onPasteTextMode,
     onDelete,
     onTogglePin,
     onFocus,
@@ -77,6 +79,10 @@ export const HistoryItem = forwardRef<HTMLDivElement, HistoryItemProps>(function
   const handleClick = useCallback(() => {
     onPaste(item.id)
   }, [item.id, onPaste])
+
+  const handleTextModePaste = useCallback(() => {
+    onPasteTextMode(item.id)
+  }, [item.id, onPasteTextMode])
 
   // Handle delete with stopPropagation
   const handleDelete = useCallback(
@@ -138,6 +144,16 @@ export const HistoryItem = forwardRef<HTMLDivElement, HistoryItemProps>(function
       role="button"
       tabIndex={isFocused ? 0 : -1}
       onKeyDown={(e) => {
+        if (e.ctrlKey && e.key.toLowerCase() === 'v') {
+          e.preventDefault()
+          if (e.shiftKey) {
+            handleTextModePaste()
+          } else {
+            handleClick()
+          }
+          return
+        }
+
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           handleClick()

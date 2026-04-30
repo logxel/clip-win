@@ -100,6 +100,24 @@ export function useClipboardHistory() {
     [fetchHistory]
   )
 
+  // Paste an item using text-mode keystroke (Ctrl+Shift+V)
+  const pasteItemTextMode = useCallback(
+    async (id: string) => {
+      try {
+        await invoke('paste_item_text_mode', { id })
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        console.warn(
+          '[useClipboardHistory] Text-mode paste failed, refreshing history:',
+          errorMessage
+        )
+        await fetchHistory()
+        setError(errorMessage)
+      }
+    },
+    [fetchHistory]
+  )
+
   // Listen for clipboard changes
   useEffect(() => {
     fetchHistory()
@@ -169,5 +187,6 @@ export function useClipboardHistory() {
     deleteItem,
     togglePin,
     pasteItem,
+    pasteItemTextMode,
   }
 }

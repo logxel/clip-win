@@ -20,6 +20,7 @@ export function ClipboardTab(props: {
   deleteItem: (id: string) => void
   togglePin: (id: string) => void
   onPaste: (id: string) => void
+  onPasteTextMode: (id: string) => void
   settings: UserSettings
   tabBarRef: React.RefObject<TabBarRef | null>
 }) {
@@ -33,6 +34,7 @@ export function ClipboardTab(props: {
     deleteItem,
     togglePin,
     onPaste,
+    onPasteTextMode,
     settings,
     tabBarRef,
   } = props
@@ -311,6 +313,7 @@ export function ClipboardTab(props: {
               index={index}
               isFocused={index === focusedIndex}
               onPaste={onPaste}
+              onPasteTextMode={onPasteTextMode}
               onDelete={deleteItem}
               onTogglePin={togglePin}
               onFocus={() => setFocusedIndex(index)}
