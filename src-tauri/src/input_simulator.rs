@@ -4,6 +4,12 @@ use std::time::Duration;
 
 type PasteStrategy = (&'static str, fn() -> Result<(), String>);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteKeyMode {
+    CtrlV,
+    CtrlShiftV,
+}
+
 /// Delay before starting the paste sequence to ensure window focus is stable
 const PRE_PASTE_DELAY_MS: u64 = 50;
 
@@ -17,10 +23,14 @@ const UINPUT_DEVICE_SETTLE_MS: u64 = 100;
 const POST_PASTE_DELAY_MS: u64 = 30;
 
 pub fn simulate_paste_keystroke() -> Result<(), String> {
+    simulate_paste_keystroke_with_mode(PasteKeyMode::CtrlV)
+}
+
+pub fn simulate_paste_keystroke_with_mode(mode: PasteKeyMode) -> Result<(), String> {
     // Give window manager time to settle focus before sending keystrokes
     thread::sleep(Duration::from_millis(PRE_PASTE_DELAY_MS));
 
-    eprintln!("[SimulatePaste] Sending Ctrl+V...");
+    eprintln!("[SimulatePaste] Sending {}...", mode.shortcut_label());
 
     const X11_STRATEGIES: &[PasteStrategy] = &[
         ("xdotool", simulate_paste_xdotool),
@@ -36,10 +46,21 @@ pub fn simulate_paste_keystroke() -> Result<(), String> {
         NON_X11_STRATEGIES
     };
 
-    for (name, func) in strategies {
-        match func() {
+    for (name, _func) in strategies {
+        let result = match *name {
+            "xdotool" => simulate_paste_xdotool_with_mode(mode),
+            "XTest" => simulate_paste_xtest_with_mode(mode),
+            "uinput" => simulate_paste_uinput_with_mode(mode),
+            _ => Err(format!("Unknown paste strategy: {}", name)),
+        };
+
+        match result {
             Ok(()) => {
-                eprintln!("[SimulatePaste] Ctrl+V sent via {}", name);
+                eprintln!(
+                    "[SimulatePaste] {} sent via {}",
+                    mode.shortcut_label(),
+                    name
+                );
                 // Small delay after paste to let the target app process it
                 thread::sleep(Duration::from_millis(POST_PASTE_DELAY_MS));
                 return Ok(());
@@ -51,6 +72,15 @@ pub fn simulate_paste_keystroke() -> Result<(), String> {
     }
 
     Err("All paste methods failed".to_string())
+}
+
+impl PasteKeyMode {
+    fn shortcut_label(self) -> &'static str {
+        match self {
+            Self::CtrlV => "Ctrl+V",
+            Self::CtrlShiftV => "Ctrl+Shift+V",
+        }
+    }
 }
 
 /// Helper for XTest input generation
@@ -69,11 +99,16 @@ fn fake_key<C: x11rb::connection::Connection + x11rb::protocol::xtest::Connectio
 
 /// Simulate Ctrl+V using X11 XTest extension
 fn simulate_paste_xtest() -> Result<(), String> {
+    simulate_paste_xtest_with_mode(PasteKeyMode::CtrlV)
+}
+
+fn simulate_paste_xtest_with_mode(mode: PasteKeyMode) -> Result<(), String> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
     use x11rb::wrapper::ConnectionExt as WrapperConnectionExt; // Imported for sync()
 
     const CTRL_L_KEYCODE: u8 = 37;
+    const SHIFT_L_KEYCODE: u8 = 50;
     const V_KEYCODE: u8 = 55;
 
     let (conn, screen_num) =
@@ -101,6 +136,19 @@ fn simulate_paste_xtest() -> Result<(), String> {
         .map_err(|e| format!("Sync after Ctrl press failed: {}", e))?;
     thread::sleep(Duration::from_millis(KEY_EVENT_DELAY_MS));
 
+    if mode == PasteKeyMode::CtrlShiftV {
+        fake_key(
+            &conn,
+            2,
+            SHIFT_L_KEYCODE,
+            root_window,
+            "Failed to press Shift",
+        )?;
+        conn.sync()
+            .map_err(|e| format!("Sync after Shift press failed: {}", e))?;
+        thread::sleep(Duration::from_millis(KEY_EVENT_DELAY_MS));
+    }
+
     // Press V
     fake_key(&conn, 2, V_KEYCODE, root_window, "Failed to press V")?;
     conn.sync()
@@ -112,6 +160,19 @@ fn simulate_paste_xtest() -> Result<(), String> {
     conn.sync()
         .map_err(|e| format!("Sync after V release failed: {}", e))?;
     thread::sleep(Duration::from_millis(KEY_EVENT_DELAY_MS));
+
+    if mode == PasteKeyMode::CtrlShiftV {
+        fake_key(
+            &conn,
+            3,
+            SHIFT_L_KEYCODE,
+            root_window,
+            "Failed to release Shift",
+        )?;
+        conn.sync()
+            .map_err(|e| format!("Sync after Shift release failed: {}", e))?;
+        thread::sleep(Duration::from_millis(KEY_EVENT_DELAY_MS));
+    }
 
     // Release Ctrl
     fake_key(
@@ -129,18 +190,30 @@ fn simulate_paste_xtest() -> Result<(), String> {
 
 /// Simulate Ctrl+V using xdotool
 fn simulate_paste_xdotool() -> Result<(), String> {
+    simulate_paste_xdotool_with_mode(PasteKeyMode::CtrlV)
+}
+
+fn simulate_paste_xdotool_with_mode(mode: PasteKeyMode) -> Result<(), String> {
     // Send Ctrl+V to the currently focused window without specifying a target
     // Using --delay ensures proper timing between key events
+    let key_combo = match mode {
+        PasteKeyMode::CtrlV => "ctrl+v",
+        PasteKeyMode::CtrlShiftV => "ctrl+shift+v",
+    };
+
     let output = std::process::Command::new("xdotool")
         .args(["key", "--delay"])
         .arg(KEY_EVENT_DELAY_MS.to_string())
         .arg("--clearmodifiers")
-        .arg("ctrl+v")
+        .arg(key_combo)
         .output()
         .map_err(|e| format!("Failed to run xdotool key: {}", e))?;
 
     if output.status.success() {
-        eprintln!("[SimulatePaste] xdotool sent ctrl+v to focused window");
+        eprintln!(
+            "[SimulatePaste] xdotool sent {} to focused window",
+            key_combo
+        );
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -149,6 +222,10 @@ fn simulate_paste_xdotool() -> Result<(), String> {
 }
 
 fn simulate_paste_uinput() -> Result<(), String> {
+    simulate_paste_uinput_with_mode(PasteKeyMode::CtrlV)
+}
+
+fn simulate_paste_uinput_with_mode(mode: PasteKeyMode) -> Result<(), String> {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::os::unix::io::AsRawFd;
@@ -157,6 +234,7 @@ fn simulate_paste_uinput() -> Result<(), String> {
     const EV_KEY: u16 = 0x01;
     const SYN_REPORT: u16 = 0x00;
     const KEY_LEFTCTRL: u16 = 29;
+    const KEY_LEFTSHIFT: u16 = 42;
     const KEY_V: u16 = 47;
 
     fn make_event(type_: u16, code: u16, value: i32) -> [u8; 24] {
@@ -189,6 +267,14 @@ fn simulate_paste_uinput() -> Result<(), String> {
         ) < 0
         {
             return Err("Failed to set KEY_LEFTCTRL".to_string());
+        }
+        if libc::ioctl(
+            uinput.as_raw_fd(),
+            UI_SET_KEYBIT,
+            KEY_LEFTSHIFT as libc::c_int,
+        ) < 0
+        {
+            return Err("Failed to set KEY_LEFTSHIFT".to_string());
         }
         if libc::ioctl(uinput.as_raw_fd(), UI_SET_KEYBIT, KEY_V as libc::c_int) < 0 {
             return Err("Failed to set KEY_V".to_string());
@@ -231,6 +317,18 @@ fn simulate_paste_uinput() -> Result<(), String> {
     uinput.flush().map_err(|e| e.to_string())?;
     thread::sleep(Duration::from_millis(KEY_EVENT_DELAY_MS));
 
+    if mode == PasteKeyMode::CtrlShiftV {
+        // Press Shift
+        uinput
+            .write_all(&make_event(EV_KEY, KEY_LEFTSHIFT, 1))
+            .map_err(|e| e.to_string())?;
+        uinput
+            .write_all(&make_event(EV_SYN, SYN_REPORT, 0))
+            .map_err(|e| e.to_string())?;
+        uinput.flush().map_err(|e| e.to_string())?;
+        thread::sleep(Duration::from_millis(KEY_EVENT_DELAY_MS));
+    }
+
     // Press V
     uinput
         .write_all(&make_event(EV_KEY, KEY_V, 1))
@@ -240,6 +338,18 @@ fn simulate_paste_uinput() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     uinput.flush().map_err(|e| e.to_string())?;
     thread::sleep(Duration::from_millis(KEY_EVENT_DELAY_MS));
+
+    if mode == PasteKeyMode::CtrlShiftV {
+        // Release Shift
+        uinput
+            .write_all(&make_event(EV_KEY, KEY_LEFTSHIFT, 0))
+            .map_err(|e| e.to_string())?;
+        uinput
+            .write_all(&make_event(EV_SYN, SYN_REPORT, 0))
+            .map_err(|e| e.to_string())?;
+        uinput.flush().map_err(|e| e.to_string())?;
+        thread::sleep(Duration::from_millis(KEY_EVENT_DELAY_MS));
+    }
 
     // Release V
     uinput

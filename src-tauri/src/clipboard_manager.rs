@@ -640,6 +640,18 @@ impl ClipboardManager {
     }
 
     pub fn paste_item(&mut self, item: &ClipboardItem) -> Result<(), String> {
+        self.paste_item_with_key_mode(item, crate::input_simulator::PasteKeyMode::CtrlV)
+    }
+
+    pub fn paste_item_text_mode(&mut self, item: &ClipboardItem) -> Result<(), String> {
+        self.paste_item_with_key_mode(item, crate::input_simulator::PasteKeyMode::CtrlShiftV)
+    }
+
+    fn paste_item_with_key_mode(
+        &mut self,
+        item: &ClipboardItem,
+        key_mode: crate::input_simulator::PasteKeyMode,
+    ) -> Result<(), String> {
         // 1. Prevent loop: Mark as pasted before OS action
         self.mark_as_pasted(item);
 
@@ -663,7 +675,7 @@ impl ClipboardManager {
         }
 
         // 3. Simulate User Input
-        self.simulate_paste_action()?;
+        self.simulate_paste_action_with_mode(key_mode)?;
 
         // 4. Move item to top of history so it's easily accessible for repeated use
         self.move_item_to_top(&item.id);
@@ -694,12 +706,15 @@ impl ClipboardManager {
         clipboard.set_image(image_data).map_err(|e| e.to_string())
     }
 
-    fn simulate_paste_action(&self) -> Result<(), String> {
+    fn simulate_paste_action_with_mode(
+        &self,
+        key_mode: crate::input_simulator::PasteKeyMode,
+    ) -> Result<(), String> {
         // Wait for clipboard write to settle
         thread::sleep(Duration::from_millis(60));
 
         // Trigger keystroke
-        crate::input_simulator::simulate_paste_keystroke()?;
+        crate::input_simulator::simulate_paste_keystroke_with_mode(key_mode)?;
 
         // before the clipboard ownership changes or the app reads it.
         thread::sleep(Duration::from_millis(250));

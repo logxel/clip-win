@@ -51,12 +51,14 @@ Most Linux clipboard managers are purely functional but lack visual appeal. This
 
 ## ⌨️ Shortcuts & Usage
 
-| Key | Action |
-| --- | --- |
-| <kbd>Super</kbd> + <kbd>V</kbd> | **Open Clipboard History** |
-| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>V</kbd> | Alternative Shortcut |
-| <kbd>Enter</kbd> | Paste Selected Item |
-| <kbd>Esc</kbd> | Close Window |
+| Key                                               | Action                             |
+| ------------------------------------------------- | ---------------------------------- |
+| <kbd>Super</kbd> + <kbd>V</kbd>                   | **Open Clipboard History**         |
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>V</kbd>   | Alternative Shortcut               |
+| <kbd>Enter</kbd>                                  | Paste Selected Item (Normal Paste) |
+| <kbd>Ctrl</kbd> + <kbd>V</kbd>                    | Paste Selected Item (Normal Paste)  |
+| <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd> | Paste Selected Item (Text Mode)     |
+| <kbd>Esc</kbd>                                    | Close Window                       |
 
 > **Pro Tip:** Need to paste a GIF? Just select it! The app simulates `Ctrl+V` to paste the file URI directly into your chat apps.
 

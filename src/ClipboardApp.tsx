@@ -109,7 +109,7 @@ function ClipboardApp() {
   const secondaryOpacity = calculateSecondaryOpacity(opacity)
   const tertiaryOpacity = calculateTertiaryOpacity(opacity)
 
-  const { history, isLoading, clearHistory, deleteItem, togglePin, pasteItem } =
+  const { history, isLoading, clearHistory, deleteItem, togglePin, pasteItem, pasteItemTextMode } =
     useClipboardHistory()
 
   // Refs for focus management
@@ -251,6 +251,7 @@ function ClipboardApp() {
             deleteItem={deleteItem}
             togglePin={togglePin}
             onPaste={pasteItem}
+            onPasteTextMode={pasteItemTextMode}
             settings={settings}
             tabBarRef={tabBarRef}
           />
