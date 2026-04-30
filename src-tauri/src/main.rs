@@ -149,39 +149,7 @@ fn is_theme_listener_active() -> bool {
 
 #[tauri::command]
 async fn paste_item(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
-    // 1. Get Item (Scope lock tightly)
-    let item = {
-        let manager = state.clipboard_manager.lock();
-        manager.get_item(&id).cloned()
-    };
-
-    match item {
-        Some(item) => {
-            // 2. Prepare Environment (Hide Window -> Restore Focus)
-            WindowController::hide(&app);
-            PasteHelper::prepare_target_window().await?;
-
-            // 3. Perform Paste
-            let mut manager = state.clipboard_manager.lock();
-            manager.paste_item(&item).map_err(|e| e.to_string())?;
-
-            // 4. Notify frontend of history change (item moved to top)
-            let history = manager.get_history();
-            drop(manager); // Release lock before emitting
-            let _ = app.emit("history-sync", &history);
-        }
-        None => {
-            eprintln!(
-                "[paste_item] Item with id '{}' not found in history. Syncing frontend...",
-                id
-            );
-            // Emit event to trigger frontend refresh
-            let history = state.clipboard_manager.lock().get_history();
-            let _ = app.emit("history-sync", &history);
-            return Err(format!("Item '{}' not found. History has been synced.", id));
-        }
-    }
-    Ok(())
+    paste_item_with_mode(&app, &state, &id, ClipboardManager::paste_item).await
 }
 
 #[tauri::command]
@@ -190,23 +158,30 @@ async fn paste_item_text_mode(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
+    paste_item_with_mode(&app, &state, &id, ClipboardManager::paste_item_text_mode).await
+}
+
+async fn paste_item_with_mode(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    id: &str,
+    paste_fn: fn(&mut ClipboardManager, &ClipboardItem) -> Result<(), String>,
+) -> Result<(), String> {
     // 1. Get Item (Scope lock tightly)
     let item = {
         let manager = state.clipboard_manager.lock();
-        manager.get_item(&id).cloned()
+        manager.get_item(id).cloned()
     };
 
     match item {
         Some(item) => {
             // 2. Prepare Environment (Hide Window -> Restore Focus)
-            WindowController::hide(&app);
+            WindowController::hide(app);
             PasteHelper::prepare_target_window().await?;
 
-            // 3. Perform text-mode paste (Ctrl+Shift+V)
+            // 3. Perform Paste
             let mut manager = state.clipboard_manager.lock();
-            manager
-                .paste_item_text_mode(&item)
-                .map_err(|e| e.to_string())?;
+            paste_fn(&mut manager, &item).map_err(|e| e.to_string())?;
 
             // 4. Notify frontend of history change (item moved to top)
             let history = manager.get_history();
@@ -214,17 +189,11 @@ async fn paste_item_text_mode(
             let _ = app.emit("history-sync", &history);
         }
         None => {
-            eprintln!(
-                "[paste_item_text_mode] Item with id '{}' not found in history. Syncing frontend...",
-                id
-            );
-            // Emit event to trigger frontend refresh
-            let history = state.clipboard_manager.lock().get_history();
-            let _ = app.emit("history-sync", &history);
-            return Err(format!("Item '{}' not found. History has been synced.", id));
+            eprintln!("[paste_item] Item with id '{}' not found in history.", id);
+            // Frontend error handler calls fetchHistory() — no redundant emit needed
+            return Err(format!("Item '{}' not found in history.", id));
         }
     }
-
     Ok(())
 }
 

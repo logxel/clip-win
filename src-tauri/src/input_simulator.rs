@@ -2,7 +2,7 @@ use crate::session;
 use std::thread;
 use std::time::Duration;
 
-type PasteStrategy = &'static str;
+type PasteStrategy = (&'static str, fn(PasteKeyMode) -> Result<(), String>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PasteKeyMode {
@@ -32,8 +32,12 @@ pub fn simulate_paste_keystroke_with_mode(mode: PasteKeyMode) -> Result<(), Stri
 
     eprintln!("[SimulatePaste] Sending {}...", mode.shortcut_label());
 
-    const X11_STRATEGIES: &[PasteStrategy] = &["xdotool", "XTest", "uinput"];
-    const NON_X11_STRATEGIES: &[PasteStrategy] = &["uinput"];
+    const X11_STRATEGIES: &[PasteStrategy] = &[
+        ("xdotool", simulate_paste_xdotool_with_mode),
+        ("XTest", simulate_paste_xtest_with_mode),
+        ("uinput", simulate_paste_uinput_with_mode),
+    ];
+    const NON_X11_STRATEGIES: &[PasteStrategy] = &[("uinput", simulate_paste_uinput_with_mode)];
 
     let strategies = if session::is_x11() {
         X11_STRATEGIES
@@ -41,15 +45,8 @@ pub fn simulate_paste_keystroke_with_mode(mode: PasteKeyMode) -> Result<(), Stri
         NON_X11_STRATEGIES
     };
 
-    for name in strategies {
-        let result = match *name {
-            "xdotool" => simulate_paste_xdotool_with_mode(mode),
-            "XTest" => simulate_paste_xtest_with_mode(mode),
-            "uinput" => simulate_paste_uinput_with_mode(mode),
-            _ => Err(format!("Unknown paste strategy: {}", name)),
-        };
-
-        match result {
+    for (name, func) in strategies {
+        match func(mode) {
             Ok(()) => {
                 eprintln!(
                     "[SimulatePaste] {} sent via {}",
