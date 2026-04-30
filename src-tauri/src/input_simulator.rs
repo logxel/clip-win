@@ -2,7 +2,7 @@ use crate::session;
 use std::thread;
 use std::time::Duration;
 
-type PasteStrategy = (&'static str, fn() -> Result<(), String>);
+type PasteStrategy = &'static str;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PasteKeyMode {
@@ -32,13 +32,8 @@ pub fn simulate_paste_keystroke_with_mode(mode: PasteKeyMode) -> Result<(), Stri
 
     eprintln!("[SimulatePaste] Sending {}...", mode.shortcut_label());
 
-    const X11_STRATEGIES: &[PasteStrategy] = &[
-        ("xdotool", simulate_paste_xdotool),
-        ("XTest", simulate_paste_xtest),
-        ("uinput", simulate_paste_uinput),
-    ];
-
-    const NON_X11_STRATEGIES: &[PasteStrategy] = &[("uinput", simulate_paste_uinput)];
+    const X11_STRATEGIES: &[PasteStrategy] = &["xdotool", "XTest", "uinput"];
+    const NON_X11_STRATEGIES: &[PasteStrategy] = &["uinput"];
 
     let strategies = if session::is_x11() {
         X11_STRATEGIES
@@ -46,7 +41,7 @@ pub fn simulate_paste_keystroke_with_mode(mode: PasteKeyMode) -> Result<(), Stri
         NON_X11_STRATEGIES
     };
 
-    for (name, _func) in strategies {
+    for name in strategies {
         let result = match *name {
             "xdotool" => simulate_paste_xdotool_with_mode(mode),
             "XTest" => simulate_paste_xtest_with_mode(mode),
@@ -97,11 +92,7 @@ fn fake_key<C: x11rb::connection::Connection + x11rb::protocol::xtest::Connectio
     Ok(())
 }
 
-/// Simulate Ctrl+V using X11 XTest extension
-fn simulate_paste_xtest() -> Result<(), String> {
-    simulate_paste_xtest_with_mode(PasteKeyMode::CtrlV)
-}
-
+/// Simulate paste keystroke using X11 XTest extension
 fn simulate_paste_xtest_with_mode(mode: PasteKeyMode) -> Result<(), String> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
@@ -188,11 +179,7 @@ fn simulate_paste_xtest_with_mode(mode: PasteKeyMode) -> Result<(), String> {
     Ok(())
 }
 
-/// Simulate Ctrl+V using xdotool
-fn simulate_paste_xdotool() -> Result<(), String> {
-    simulate_paste_xdotool_with_mode(PasteKeyMode::CtrlV)
-}
-
+/// Simulate paste keystroke using xdotool
 fn simulate_paste_xdotool_with_mode(mode: PasteKeyMode) -> Result<(), String> {
     // Send Ctrl+V to the currently focused window without specifying a target
     // Using --delay ensures proper timing between key events
@@ -219,10 +206,6 @@ fn simulate_paste_xdotool_with_mode(mode: PasteKeyMode) -> Result<(), String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("xdotool key failed: {}", stderr))
     }
-}
-
-fn simulate_paste_uinput() -> Result<(), String> {
-    simulate_paste_uinput_with_mode(PasteKeyMode::CtrlV)
 }
 
 fn simulate_paste_uinput_with_mode(mode: PasteKeyMode) -> Result<(), String> {
