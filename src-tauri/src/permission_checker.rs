@@ -1,4 +1,4 @@
-//! Permission checker module for Windows 11 Clipboard History
+//! Permission checker module for Clip-Win Clipboard History
 //! Handles uinput permission verification and fixing
 
 use std::fs::OpenOptions;
@@ -19,7 +19,7 @@ fn get_config_dir() -> PathBuf {
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string())).join(".config")
         })
-        .join("win11-clipboard-history")
+        .join("clip-win")
 }
 
 /// Get the config file path

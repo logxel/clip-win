@@ -3,7 +3,7 @@
 <img width="52" height="52" alt="logo" src="https://github.com/user-attachments/assets/4534e915-5d83-45f3-9f09-48a0f94b1d9a" />
 
 
-# Windows 11 Clipboard History For Linux
+# Clip-Win History For Linux
 
 [Website](https://clipboard.gustavosett.dev) • [Report Bug](https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux/issues) • [Request Feature](https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux/discussions/new?category=ideas)
 
@@ -26,7 +26,7 @@ Get up and running in seconds. This script detects your distro, installs the app
 
 ```bash
 # Just copy and paste this into your terminal
-curl -fsSL https://raw.githubusercontent.com/gustavosett/Windows-11-Clipboard-History-For-Linux/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/techlogycs/clip-win/master/scripts/install.sh | bash
 ```
 
 > **Note:** No logout required! The installer uses ACLs to grant immediate access.
@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/gustavosett/Windows-11-Clipboard-Hi
 
 ## 🌟 Why use this?
 
-Most Linux clipboard managers are purely functional but lack visual appeal. This project brings the **modern, fluid design of Windows 11's clipboard history** to the Linux ecosystem, backed by the blazing speed of Rust.
+Most Linux clipboard managers are purely functional but lack visual appeal. This project brings the **modern, fluid design of Clip-Win's clipboard history** to the Linux ecosystem, backed by the blazing speed of Rust.
 
 | 😎 | 🔍 |
 | --- | --- |
@@ -75,10 +75,10 @@ Prefer to install manually? We support all major distributions.
 
 ```bash
 # 1. Add Repository
-curl -1sLf 'https://dl.cloudsmith.io/public/gustavosett/clipboard-manager/setup.deb.sh' | sudo -E bash
+curl -1sLf 'https://dl.cloudsmith.io/public/techlogycs/clipboard-manager/setup.deb.sh' | sudo -E bash
 
 # 2. Install
-sudo apt update && sudo apt install win11-clipboard-history
+sudo apt update && sudo apt install clip-win
 
 # 3. Grant Permissions (One-time)
 sudo setfacl -m u:$USER:rw /dev/uinput
@@ -92,10 +92,10 @@ sudo setfacl -m u:$USER:rw /dev/uinput
 
 ```bash
 # 1. Add Repository
-curl -1sLf 'https://dl.cloudsmith.io/public/gustavosett/clipboard-manager/setup.rpm.sh' | sudo -E bash
+curl -1sLf 'https://dl.cloudsmith.io/public/techlogycs/clipboard-manager/setup.rpm.sh' | sudo -E bash
 
 # 2. Install
-sudo dnf install win11-clipboard-history
+sudo dnf install clip-win
 
 # 3. Grant Permissions (One-time)
 sudo setfacl -m u:$USER:rw /dev/uinput
@@ -109,10 +109,10 @@ sudo setfacl -m u:$USER:rw /dev/uinput
 
 ```bash
 # Using yay
-yay -S win11-clipboard-history-bin
+yay -S clip-win-bin
 
 # Or using paru
-paru -S win11-clipboard-history-bin
+paru -S clip-win-bin
 
 ```
 
@@ -123,12 +123,12 @@ paru -S win11-clipboard-history-bin
 
 > ## Some features are disabled; we strongly recommend the complete installation.
 
-1. Download the `.AppImage` from [Releases](https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux/releases).
-2. Make it executable: `chmod +x win11-clipboard-history_*.AppImage`
+1. Download the `.AppImage` from [Releases](https://github.com/techlogycs/clip-win/releases).
+2. Make it executable: `chmod +x clip-win_*.AppImage`
 3. Grant permissions: `sudo setfacl -m u:$USER:rw /dev/uinput`
 4. Register the command that you want in your system to open the AppImage
 ```
-KEYBOARD SETTINGS -> SHORTCUTS -> NEW SHORTCUT -> Super+V -> ./my_awesome_folder/win11-clipboard-history.AppImage
+KEYBOARD SETTINGS -> SHORTCUTS -> NEW SHORTCUT -> Super+V -> ./my_awesome_folder/clip-win.AppImage
 ```
 
 </details>
@@ -140,11 +140,11 @@ KEYBOARD SETTINGS -> SHORTCUTS -> NEW SHORTCUT -> Super+V -> ./my_awesome_folder
 <details>
 <summary><b>Shortcut (Super+V) isn't working</b></summary>
 
-1. Ensure the app is running: `pgrep -f win11-clipboard-history-bin`
+1. Ensure the app is running: `pgrep -f clip-win-bin`
 2. If running, try resetting the config:
 ```bash
-rm ~/.config/win11-clipboard-history/setup.json
-win11-clipboard-history
+rm ~/.config/clip-win/setup.json
+clip-win
 
 ```
 
@@ -160,10 +160,10 @@ If you see a black background or flickering, use the compatibility mode:
 
 ```bash
 # Force NVIDIA workaround
-IS_NVIDIA=1 win11-clipboard-history
+IS_NVIDIA=1 clip-win
 
 # Force AppImage workaround
-IS_APPIMAGE=1 win11-clipboard-history
+IS_APPIMAGE=1 clip-win
 
 ```
 
@@ -177,6 +177,17 @@ Want to hack on the code?
 
 **Tech Stack:** `Rust` + `Tauri v2` + `React` + `Tailwind CSS` + `Linux`
 
+### Dev Container Setup
+
+This repository now includes a dev container for a consistent Linux Tauri environment.
+
+1. Install the VS Code Dev Containers extension.
+2. Open the repository in VS Code.
+3. Run `Dev Containers: Reopen in Container`.
+4. Wait for the post-create setup to install Rust tooling and npm dependencies.
+
+The container includes the Rust toolchain, Node.js 20, and the Linux libraries required to build and run the Tauri app.
+
 <div align="center">
   <a href="https://skillicons.dev">
     <img src="https://skillicons.dev/icons?i=rust,tauri,react,ts,tailwind,linux" />
@@ -185,8 +196,8 @@ Want to hack on the code?
 
 ```bash
 # 1. Clone
-git clone https://github.com/gustavosett/Windows-11-Clipboard-History-For-Linux.git
-cd Windows-11-Clipboard-History-For-Linux
+git clone https://github.com/techlogycs/clip-win.git
+cd clip-win
 
 # 2. Install Deps
 make deps && make rust && make node

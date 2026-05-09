@@ -1,5 +1,5 @@
 #!/bin/bash
-# Post-removal script for win11-clipboard-history
+# Post-removal script for clip-win
 set -e
 
 case "$1" in

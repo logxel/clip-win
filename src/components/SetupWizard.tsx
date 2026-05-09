@@ -305,7 +305,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           isDark ? 'text-win11-text-secondary' : 'text-win11Light-text-secondary'
         )}
       >
-        A Windows 11-style clipboard manager for Linux.
+        A Clip-Win-style clipboard manager for Linux.
         <br />
         Let's set up a few things to get you started.
       </p>
@@ -515,10 +515,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               </p>
             </div>
           </div>
-          <Button
-            id="copy-path"
-            onClick={() => copyToClipboard('/usr/bin/win11-clipboard-history')}
-          >
+          <Button id="copy-path" onClick={() => copyToClipboard('/usr/bin/clip-win')}>
             <span className="flex items-center justify-center gap-2">
               <Copy className="w-4 h-4" />
               {copied ? 'Copied!' : 'Copy command path'}
