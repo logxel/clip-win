@@ -34,5 +34,6 @@ coverage/
 # Tauri
 src-tauri/WixTools/
 src-tauri/Cargo.lock
+src-tauri/gen/
 
 temp/*

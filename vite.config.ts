@@ -10,7 +10,7 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     watch: {
-      // Workaround for WSL on Windows
+      // Use polling to keep file watching reliable across Linux environments.
       usePolling: true,
     },
   },
@@ -22,10 +22,10 @@ export default defineConfig({
   envPrefix: ['VITE_', 'TAURI_'],
 
   build: {
-    // Tauri uses Chromium on Windows and WebKit on macOS and Linux
-    target: process.env.TAURI_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
+    // Linux builds run on WebKitGTK.
+    target: 'safari13',
     // Don't minify for debug builds
-    minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
+    minify: process.env.TAURI_DEBUG ? false : 'esbuild',
     // Produce sourcemaps for debug builds
     sourcemap: !!process.env.TAURI_DEBUG,
     rollupOptions: {
