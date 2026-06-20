@@ -182,13 +182,17 @@ impl ClipboardManager {
     /// Kill the tracked clipboard child process (if any) and reap it on a
     /// background thread so the caller never blocks waiting for the zombie.
     fn kill_and_reap_child(&self) {
-        if let Ok(mut guard) = self.clipboard_server.lock() {
-            if let Some(mut child) = guard.take() {
-                let _ = child.kill();
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-            }
+        // Recover from a poisoned mutex so we still clean up the child;
+        // a panic elsewhere shouldn't leave a zombie behind.
+        let mut guard = match self.clipboard_server.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
         }
     }
 }
@@ -1044,6 +1048,15 @@ mod tests {
         init_test_env();
         if try_get_clipboard().is_none() {
             eprintln!("skipping — no display");
+            return;
+        }
+        // Bail early with a clear message if pgrep isn't on PATH.
+        if std::process::Command::new("pgrep")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping — pgrep not available");
             return;
         }
         let m = make_manager("tp.json", 10);
