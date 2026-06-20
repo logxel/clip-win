@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag to release (e.g. v1.0.0). Only used for manual dispatch.'
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -35,7 +41,10 @@ jobs:
 
       - name: Get version from tag
         id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: |
+          TAG="${{ inputs.tag_name || github.ref_name }}"
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -102,7 +111,10 @@ jobs:
 
       - name: Get version from tag
         id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: |
+          TAG="${{ inputs.tag_name || github.ref_name }}"
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -115,13 +127,13 @@ jobs:
 
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v3
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.tag_name != ''
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
+          tag_name: ${{ steps.get_version.outputs.TAG }}
+          name: Release ${{ steps.get_version.outputs.TAG }}
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') || contains(github.ref_name, 'dev') }}
+          prerelease: ${{ contains(steps.get_version.outputs.TAG, 'alpha') || contains(steps.get_version.outputs.TAG, 'beta') || contains(steps.get_version.outputs.TAG, 'rc') || contains(steps.get_version.outputs.TAG, 'dev') }}
           files: |
             artifacts/**/*.deb
             artifacts/**/*.AppImage
@@ -131,7 +143,7 @@ jobs:
 
             <img width="128" height="128" alt="logo" src="https://github.com/user-attachments/assets/4534e915-5d83-45f3-9f09-48a0f94b1d9a" />
 
-            # W11 Clipboard For Linux ${{ github.ref_name }}
+            # W11 Clipboard For Linux ${{ steps.get_version.outputs.TAG }}
 
             ## 🚀 Quick Installation (Recommended)
 
@@ -214,7 +226,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload to Cloudsmith (stable releases only)
-        if: ${{ !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'rc') && !contains(github.ref_name, 'dev') }}
+        if: ${{ !contains(steps.get_version.outputs.TAG, 'alpha') && !contains(steps.get_version.outputs.TAG, 'beta') && !contains(steps.get_version.outputs.TAG, 'rc') && !contains(steps.get_version.outputs.TAG, 'dev') }}
         continue-on-error: true
         env:
           CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
@@ -253,7 +265,7 @@ jobs:
           fi
 
       - name: Update AUR Package
-        if: ${{ !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'rc') && !contains(github.ref_name, 'dev') }}
+        if: ${{ !contains(steps.get_version.outputs.TAG, 'alpha') && !contains(steps.get_version.outputs.TAG, 'beta') && !contains(steps.get_version.outputs.TAG, 'rc') && !contains(steps.get_version.outputs.TAG, 'dev') }}
         continue-on-error: true
         env:
           AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
