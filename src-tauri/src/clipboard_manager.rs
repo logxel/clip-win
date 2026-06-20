@@ -10,6 +10,8 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::process::Child;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
@@ -173,6 +175,28 @@ pub struct ClipboardManager {
     persistence_path: PathBuf,
     /// Maximum number of history items to keep
     max_history_size: usize,
+    clipboard_server: Mutex<Option<Child>>,
+}
+
+impl ClipboardManager {
+    /// Kill the tracked clipboard child process (if any) and reap it on a
+    /// background thread so the caller never blocks waiting for the zombie.
+    fn kill_and_reap_child(&self) {
+        if let Ok(mut guard) = self.clipboard_server.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+        }
+    }
+}
+
+impl Drop for ClipboardManager {
+    fn drop(&mut self) {
+        self.kill_and_reap_child();
+    }
 }
 
 impl ClipboardManager {
@@ -194,6 +218,7 @@ impl ClipboardManager {
             last_added_text_hash: None,
             persistence_path,
             max_history_size: max_size,
+            clipboard_server: Mutex::new(None),
         };
         manager.load_history();
         manager
@@ -759,7 +784,11 @@ impl ClipboardManager {
                 if let Ok(()) =
                     self.set_clipboard_external("wl-copy", &["--type", "text/html"], html)
                 {
-                    let _ = self.set_text_robust(plain);
+                    let _ = self.set_clipboard_external_no_kill(
+                        "wl-copy",
+                        &["--type", "text/plain;charset=utf-8"],
+                        plain,
+                    );
                     return Ok(());
                 }
             } else if let Ok(()) = self.set_clipboard_external(
@@ -767,7 +796,11 @@ impl ClipboardManager {
                 &["-selection", "clipboard", "-t", "text/html"],
                 html,
             ) {
-                let _ = self.set_text_robust(plain);
+                let _ = self.set_clipboard_external_no_kill(
+                    "xclip",
+                    &["-selection", "clipboard", "-t", "UTF8_STRING"],
+                    plain,
+                );
                 return Ok(());
             }
         }
@@ -780,8 +813,31 @@ impl ClipboardManager {
     }
 
     fn set_clipboard_external(&self, cmd: &str, args: &[&str], data: &str) -> Result<(), String> {
+        self.set_clipboard_external_impl(cmd, args, data, true)
+    }
+
+    fn set_clipboard_external_no_kill(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        data: &str,
+    ) -> Result<(), String> {
+        self.set_clipboard_external_impl(cmd, args, data, false)
+    }
+
+    fn set_clipboard_external_impl(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        data: &str,
+        kill_previous: bool,
+    ) -> Result<(), String> {
         use std::io::{Read, Write};
         use std::process::{Command, Stdio};
+
+        if kill_previous {
+            self.kill_and_reap_child();
+        }
 
         let mut child = Command::new(cmd)
             .args(args)
@@ -797,7 +853,6 @@ impl ClipboardManager {
                 .map_err(|e| format!("Pipe write error: {}", e))?;
         }
 
-        // Wait briefly to see if it crashed
         thread::sleep(Duration::from_millis(WL_COPY_SETTLE_TIME));
 
         match child.try_wait() {
@@ -814,10 +869,19 @@ impl ClipboardManager {
                 ))
             }
             Ok(_) => {
-                // If it's still running or exited successfully, we assume it worked.
-                // For xclip/wl-copy, they often background themselves or stay alive to serve content.
-                if cmd == "xclip" {
-                    thread::spawn(move || {
+                // Only track this child when replacing the previous server.
+                // The no-kill path (plain-text fallback in set_html_robust) leaves
+                // the HTML server tracked so it can be cleaned up later.
+                if kill_previous {
+                    let mut guard = self
+                        .clipboard_server
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    *guard = Some(child);
+                } else {
+                    // Detach: reap on background thread so the no-kill child
+                    // doesn't become a zombie when it eventually exits.
+                    std::thread::spawn(move || {
                         let _ = child.wait();
                     });
                 }
@@ -825,5 +889,205 @@ impl ClipboardManager {
             }
             Err(e) => Err(format!("Process status check failed: {}", e)),
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    fn init_test_env() {
+        INIT.call_once(|| {
+            crate::session::init();
+        });
+    }
+
+    fn try_get_clipboard() -> Option<Clipboard> {
+        get_system_clipboard().ok()
+    }
+
+    fn make_manager(path: &str, max_size: usize) -> ClipboardManager {
+        let unique_name = format!("{}_{}", path, Uuid::new_v4());
+        let p = std::env::temp_dir().join(unique_name);
+        let _ = std::fs::remove_file(&p);
+        ClipboardManager::new(p, max_size)
+    }
+
+    fn make_text_item(text: &str) -> ClipboardItem {
+        ClipboardItem::new_text(text.to_string())
+    }
+
+    #[test]
+    fn should_skip_empty_text() {
+        let mut m = make_manager("t1.json", 10);
+        assert!(m.should_skip_text(""));
+        assert!(m.should_skip_text("   "));
+        assert!(!m.should_skip_text("hi"));
+    }
+
+    #[test]
+    fn should_skip_self_pasted() {
+        let mut m = make_manager("t2.json", 10);
+        m.mark_text_as_pasted("pasted");
+        assert!(m.should_skip_text("pasted"));
+        assert!(!m.should_skip_text("pasted"));
+    }
+
+    #[test]
+    fn is_duplicate_detects_top() {
+        let mut m = make_manager("t3.json", 10);
+        m.insert_item(make_text_item("hello"));
+        assert!(m.is_duplicate_text("hello"));
+        assert!(!m.is_duplicate_text("world"));
+    }
+
+    #[test]
+    fn is_duplicate_ignores_pinned() {
+        let mut m = make_manager("t4.json", 10);
+        m.insert_item(make_text_item("keep"));
+        let id = m.history[0].id.clone();
+        m.toggle_pin(&id);
+        m.insert_item(make_text_item("hello"));
+        assert!(!m.is_duplicate_text("keep"));
+        assert!(m.is_duplicate_text("hello"));
+    }
+
+    #[test]
+    fn remove_duplicate_text_works() {
+        let mut m = make_manager("t5.json", 10);
+        m.insert_item(make_text_item("a"));
+        m.insert_item(make_text_item("b"));
+        m.insert_item(make_text_item("c"));
+        m.remove_duplicate_text_from_history("b");
+        assert_eq!(m.history.len(), 2);
+    }
+
+    #[test]
+    fn enforce_limit_trims() {
+        let mut m = make_manager("t6.json", 3);
+        for i in 0..5 {
+            m.insert_item(make_text_item(&format!("item{}", i)));
+        }
+        assert_eq!(m.history.len(), 3);
+    }
+
+    #[test]
+    fn enforce_limit_preserves_pinned() {
+        let mut m = make_manager("t7.json", 10);
+        m.insert_item(make_text_item("a"));
+        m.insert_item(make_text_item("b"));
+        m.insert_item(make_text_item("c"));
+        let b = m.history[1].id.clone();
+        let a = m.history[2].id.clone();
+        m.toggle_pin(&b);
+        m.toggle_pin(&a);
+        m.set_max_history_size(2);
+        assert_eq!(m.history.len(), 2);
+        assert!(m.history.iter().all(|i| i.pinned));
+    }
+
+    #[test]
+    fn add_text_inserts() {
+        let mut m = make_manager("t8.json", 10);
+        assert!(m.add_text("new".into(), None).is_some());
+        assert_eq!(m.history.len(), 1);
+    }
+
+    #[test]
+    fn add_text_skips_top_duplicate() {
+        let mut m = make_manager("t9.json", 10);
+        assert!(m.add_text("same".into(), None).is_some());
+        assert!(m.add_text("same".into(), None).is_none());
+    }
+
+    #[test]
+    fn add_text_moves_duplicate_to_top() {
+        let mut m = make_manager("t10.json", 10);
+        m.add_text("first".into(), None);
+        m.add_text("second".into(), None);
+        m.add_text("first".into(), None);
+        assert_eq!(m.history.len(), 2);
+    }
+
+    #[test]
+    fn add_text_with_html() {
+        let mut m = make_manager("t11.json", 10);
+        m.add_text("plain".into(), Some("<b>bold</b>".into()));
+        match &m.history[0].content {
+            ClipboardContent::RichText { plain, html } => {
+                assert_eq!(plain, "plain");
+                assert_eq!(html, "<b>bold</b>");
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn mark_as_pasted_skips() {
+        let mut m = make_manager("t12.json", 10);
+        m.mark_text_as_pasted("emoji");
+        assert!(m.should_skip_text("emoji"));
+    }
+
+    #[test]
+    fn clear_keeps_pinned() {
+        let mut m = make_manager("t13.json", 10);
+        m.insert_item(make_text_item("a"));
+        m.insert_item(make_text_item("b"));
+        m.insert_item(make_text_item("c"));
+        let b = m.history[1].id.clone();
+        m.toggle_pin(&b);
+        m.clear();
+        assert_eq!(m.history.len(), 1);
+        assert!(m.history[0].pinned);
+    }
+
+    #[test]
+    fn toggle_pin_flips() {
+        let mut m = make_manager("t14.json", 10);
+        m.insert_item(make_text_item("pin"));
+        let id = m.history[0].id.clone();
+        assert!(!m.history[0].pinned);
+        assert!(m.toggle_pin(&id).unwrap().pinned);
+        assert!(!m.toggle_pin(&id).unwrap().pinned);
+    }
+
+    #[test]
+    fn process_not_accumulated() {
+        init_test_env();
+        if try_get_clipboard().is_none() {
+            eprintln!("skipping — no display");
+            return;
+        }
+        let m = make_manager("tp.json", 10);
+        for i in 0..5 {
+            m.set_text_robust(&format!("p{}", i)).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let count = || -> usize {
+            let run = |name: &str| -> usize {
+                std::process::Command::new("pgrep")
+                    .args(["-c", "-x", name])
+                    .output()
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .trim()
+                            .parse()
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(0)
+            };
+            run("xclip") + run("wl-copy")
+        };
+        assert!(count() <= 1, "orphaned clipboard servers: {}", count());
+    }
+
+    #[test]
+    fn construct_and_drop_ok() {
+        let m = make_manager("td.json", 10);
+        assert_eq!(m.get_max_history_size(), 10);
+        drop(m);
     }
 }
