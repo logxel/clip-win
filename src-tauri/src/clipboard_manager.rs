@@ -182,8 +182,11 @@ impl Drop for ClipboardManager {
     fn drop(&mut self) {
         if let Ok(mut guard) = self.clipboard_server.lock() {
             if let Some(mut child) = guard.take() {
+                // Best-effort kill; reap on background thread so Drop stays non-blocking.
                 let _ = child.kill();
-                let _ = child.wait();
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
             }
         }
     }
@@ -851,11 +854,22 @@ impl ClipboardManager {
                 ))
             }
             Ok(_) => {
-                let mut guard = self
-                    .clipboard_server
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                *guard = Some(child);
+                // Only track this child when replacing the previous server.
+                // The no-kill path (plain-text fallback in set_html_robust) leaves
+                // the HTML server tracked so it can be cleaned up later.
+                if kill_previous {
+                    let mut guard = self
+                        .clipboard_server
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    *guard = Some(child);
+                } else {
+                    // Detach: reap on background thread so the no-kill child
+                    // doesn't become a zombie when it eventually exits.
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                }
                 Ok(())
             }
             Err(e) => Err(format!("Process status check failed: {}", e)),
@@ -1036,17 +1050,22 @@ mod tests {
             m.set_text_robust(&format!("p{}", i)).unwrap();
             std::thread::sleep(Duration::from_millis(100));
         }
-        let count = std::process::Command::new("pgrep")
-            .args(["-c", "-x", "(xclip|wl-copy)"])
-            .output()
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .trim()
-                    .parse()
+        let count = || -> usize {
+            let run = |name: &str| -> usize {
+                std::process::Command::new("pgrep")
+                    .args(["-c", "-x", name])
+                    .output()
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .trim()
+                            .parse()
+                            .unwrap_or(0)
+                    })
                     .unwrap_or(0)
-            })
-            .unwrap_or(0);
-        assert!(count <= 1, "orphaned clipboard servers: {}", count);
+            };
+            run("xclip") + run("wl-copy")
+        };
+        assert!(count() <= 1, "orphaned clipboard servers: {}", count());
     }
 
     #[test]
