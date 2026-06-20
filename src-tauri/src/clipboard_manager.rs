@@ -738,7 +738,14 @@ impl ClipboardManager {
                 }
             } else if let Ok(()) = self.set_clipboard_external(
                 "xclip",
-                &["-selection", "clipboard", "-t", "UTF8_STRING"],
+                &[
+                    "-selection",
+                    "clipboard",
+                    "-t",
+                    "UTF8_STRING",
+                    "-loops",
+                    "0",
+                ],
                 text,
             ) {
                 return Ok(());
@@ -764,7 +771,7 @@ impl ClipboardManager {
                 }
             } else if let Ok(()) = self.set_clipboard_external(
                 "xclip",
-                &["-selection", "clipboard", "-t", "text/html"],
+                &["-selection", "clipboard", "-t", "text/html", "-loops", "0"],
                 html,
             ) {
                 let _ = self.set_text_robust(plain);
@@ -814,16 +821,228 @@ impl ClipboardManager {
                 ))
             }
             Ok(_) => {
-                // If it's still running or exited successfully, we assume it worked.
-                // For xclip/wl-copy, they often background themselves or stay alive to serve content.
-                if cmd == "xclip" {
-                    thread::spawn(move || {
-                        let _ = child.wait();
-                    });
-                }
+                // Detach the child process so it can continue serving the clipboard.
+                // xclip and wl-copy stay alive to serve content to paste requestors.
+                // We spawn a thread to reap the zombie once the process finally exits.
+                thread::spawn(move || {
+                    let _ = child.wait();
+                });
                 Ok(())
             }
             Err(e) => Err(format!("Process status check failed: {}", e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+    use std::time::Instant;
+
+    static INIT: Once = Once::new();
+
+    fn init_test_env() {
+        INIT.call_once(|| {
+            crate::session::init();
+        });
+    }
+
+    fn try_get_clipboard() -> Option<Clipboard> {
+        get_system_clipboard().ok()
+    }
+
+    fn make_manager(name: &str, max_size: usize) -> ClipboardManager {
+        let p = std::env::temp_dir().join(format!("clip-win-test-{}", name));
+        let _ = std::fs::remove_file(&p);
+        ClipboardManager::new(p, max_size)
+    }
+
+    fn make_text_item(text: &str) -> ClipboardItem {
+        ClipboardItem::new_text(text.to_string())
+    }
+
+    // ── Pure logic tests (no display server, no sleeps, independent temp dirs) ──
+
+    #[test]
+    fn should_skip_empty_text() {
+        let mut m = make_manager("skip_empty", 10);
+        assert!(m.should_skip_text(""));
+        assert!(m.should_skip_text("   "));
+        assert!(!m.should_skip_text("hi"));
+    }
+
+    #[test]
+    fn should_skip_self_pasted() {
+        let mut m = make_manager("skip_self", 10);
+        m.mark_text_as_pasted("pasted");
+        assert!(m.should_skip_text("pasted"));
+        assert!(!m.should_skip_text("pasted"));
+    }
+
+    #[test]
+    fn is_duplicate_detects_top() {
+        let mut m = make_manager("dup_top", 10);
+        m.insert_item(make_text_item("hello"));
+        assert!(m.is_duplicate_text("hello"));
+        assert!(!m.is_duplicate_text("world"));
+    }
+
+    #[test]
+    fn is_duplicate_ignores_pinned() {
+        let mut m = make_manager("dup_pin", 10);
+        m.insert_item(make_text_item("keep"));
+        let id = m.history[0].id.clone();
+        m.toggle_pin(&id);
+        m.insert_item(make_text_item("hello"));
+        assert!(!m.is_duplicate_text("keep"));
+        assert!(m.is_duplicate_text("hello"));
+    }
+
+    #[test]
+    fn remove_duplicate_text_works() {
+        let mut m = make_manager("rm_dup", 10);
+        m.insert_item(make_text_item("a"));
+        m.insert_item(make_text_item("b"));
+        m.insert_item(make_text_item("c"));
+        m.remove_duplicate_text_from_history("b");
+        assert_eq!(m.history.len(), 2);
+    }
+
+    #[test]
+    fn enforce_limit_trims() {
+        let mut m = make_manager("limit", 3);
+        for i in 0..5 {
+            m.insert_item(make_text_item(&format!("item{}", i)));
+        }
+        assert_eq!(m.history.len(), 3);
+    }
+
+    #[test]
+    fn enforce_limit_preserves_pinned() {
+        let mut m = make_manager("limit_pin", 10);
+        m.insert_item(make_text_item("a"));
+        m.insert_item(make_text_item("b"));
+        m.insert_item(make_text_item("c"));
+        let b = m.history[1].id.clone();
+        let a = m.history[2].id.clone();
+        m.toggle_pin(&b);
+        m.toggle_pin(&a);
+        m.set_max_history_size(2);
+        assert_eq!(m.history.len(), 2);
+        assert!(m.history.iter().all(|i| i.pinned));
+    }
+
+    #[test]
+    fn add_text_inserts() {
+        let mut m = make_manager("add", 10);
+        assert!(m.add_text("new".into(), None).is_some());
+        assert_eq!(m.history.len(), 1);
+    }
+
+    #[test]
+    fn add_text_skips_top_duplicate() {
+        let mut m = make_manager("add_dup", 10);
+        assert!(m.add_text("same".into(), None).is_some());
+        assert!(m.add_text("same".into(), None).is_none());
+    }
+
+    #[test]
+    fn add_text_moves_duplicate_to_top() {
+        let mut m = make_manager("add_move", 10);
+        m.add_text("first".into(), None);
+        m.add_text("second".into(), None);
+        m.add_text("first".into(), None);
+        assert_eq!(m.history.len(), 2);
+    }
+
+    #[test]
+    fn add_text_with_html() {
+        let mut m = make_manager("add_html", 10);
+        m.add_text("plain".into(), Some("<b>bold</b>".into()));
+        match &m.history[0].content {
+            ClipboardContent::RichText { plain, html } => {
+                assert_eq!(plain, "plain");
+                assert_eq!(html, "<b>bold</b>");
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn mark_as_pasted_skips() {
+        let mut m = make_manager("mark", 10);
+        m.mark_text_as_pasted("emoji");
+        assert!(m.should_skip_text("emoji"));
+    }
+
+    #[test]
+    fn clear_keeps_pinned() {
+        let mut m = make_manager("clear", 10);
+        m.insert_item(make_text_item("a"));
+        m.insert_item(make_text_item("b"));
+        m.insert_item(make_text_item("c"));
+        let b = m.history[1].id.clone();
+        m.toggle_pin(&b);
+        m.clear();
+        assert_eq!(m.history.len(), 1);
+        assert!(m.history[0].pinned);
+    }
+
+    #[test]
+    fn toggle_pin_flips() {
+        let mut m = make_manager("pin", 10);
+        m.insert_item(make_text_item("pin"));
+        let id = m.history[0].id.clone();
+        assert!(!m.history[0].pinned);
+        assert!(m.toggle_pin(&id).unwrap().pinned);
+        assert!(!m.toggle_pin(&id).unwrap().pinned);
+    }
+
+    // ── Integration test: clipboard persistence (display server required) ──
+
+    /// Verifies clipboard data set via set_text_robust can be read back,
+    /// using polling with timeout instead of fixed sleep to avoid flakiness.
+    #[test]
+    fn set_text_robust_persists_data() {
+        init_test_env();
+
+        let mut clipboard = match try_get_clipboard() {
+            Some(c) => c,
+            None => {
+                eprintln!("skipping — no display server");
+                return;
+            }
+        };
+
+        let mut m = make_manager("persist", 10);
+        let test_text = "persistence-test-42";
+
+        m.set_text_robust(test_text)
+            .expect("set_text_robust should succeed");
+
+        // Poll with timeout instead of fixed sleep
+        let deadline = Instant::now() + Duration::from_millis(2000);
+        let mut read_back = Err(arboard::Error::ContentNotAvailable);
+        while Instant::now() < deadline {
+            read_back = clipboard.get_text();
+            if read_back.is_ok() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        assert_eq!(
+            read_back.expect("clipboard should be readable within timeout"),
+            test_text,
+            "Clipboard data should persist after set_text_robust"
+        );
+    }
+
+    #[test]
+    fn construct_and_drop_ok() {
+        let m = make_manager("drop", 10);
+        assert_eq!(m.get_max_history_size(), 10);
+        drop(m);
     }
 }
