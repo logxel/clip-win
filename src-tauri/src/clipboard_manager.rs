@@ -327,9 +327,41 @@ impl ClipboardManager {
     // --- Monitoring / Reading ---
 
     pub fn get_current_text(&mut self) -> Result<String, arboard::Error> {
-        // We unwrap internal map error because arboard::Error is the expected return type here
-        // for the monitoring loop in main.rs
-        Clipboard::new()?.get_text()
+        match Clipboard::new()?.get_text() {
+            Ok(text) => Ok(text),
+            Err(arboard_err) => {
+                #[cfg(target_os = "linux")]
+                {
+                    if crate::session::is_wayland() {
+                        eprintln!(
+                            "[ClipboardManager] arboard read failed: {}. Trying wl-paste fallback...",
+                            arboard_err
+                        );
+                        if let Some(text) = self.get_text_via_wl_paste() {
+                            return Ok(text);
+                        }
+                        eprintln!("[ClipboardManager] wl-paste fallback also failed");
+                    }
+                }
+                Err(arboard_err)
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn get_text_via_wl_paste(&self) -> Option<String> {
+        use std::process::Command;
+        let output = Command::new("wl-paste")
+            .args(["--no-newline"])
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout).to_string();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+        None
     }
 
     /// Try to get HTML content from clipboard. Returns None if not available.
