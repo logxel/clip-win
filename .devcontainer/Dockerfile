@@ -21,6 +21,14 @@ RUN apt-get update \
         wl-clipboard \
         xclip \
         xvfb \
+        x11-apps \
+        mesa-utils \
+        wayland-utils \
+        dbus-x11 \
+        libxkbcommon0 \
+        libegl1 \
+        libgl1 \
+        libgbm1 \
     && rm -rf /var/lib/apt/lists/*
 
 USER vscode

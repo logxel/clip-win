@@ -14,16 +14,24 @@
     "--ipc=host",
     "--cap-add=SYS_PTRACE",
     "--security-opt",
-    "seccomp=unconfined"
+    "seccomp=unconfined",
+
+    "--env=DISPLAY=${localEnv:DISPLAY}",
+    "--env=WAYLAND_DISPLAY=${localEnv:WAYLAND_DISPLAY}",
+    "--env=XDG_RUNTIME_DIR=/tmp/runtime-vscode",
+
+    "--device=/dev/dri"
   ],
   "mounts": [
     "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
-    "source=${localEnv:XDG_RUNTIME_DIR},target=${localEnv:XDG_RUNTIME_DIR},type=bind"
+    "source=${localEnv:XDG_RUNTIME_DIR}/${localEnv:WAYLAND_DISPLAY},target=/tmp/runtime-vscode/${localEnv:WAYLAND_DISPLAY},type=bind",
+    "source=${localEnv:XDG_RUNTIME_DIR}/bus,target=/tmp/runtime-vscode/bus,type=bind"
   ],
   "containerEnv": {
     "DISPLAY": "${localEnv:DISPLAY}",
     "WAYLAND_DISPLAY": "${localEnv:WAYLAND_DISPLAY}",
-    "XDG_RUNTIME_DIR": "${localEnv:XDG_RUNTIME_DIR}",
+    "XDG_RUNTIME_DIR": "/tmp/runtime-vscode",
+    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/runtime-vscode/bus",
     "LIBGL_ALWAYS_SOFTWARE": "1"
   },
   "forwardPorts": [1420],
