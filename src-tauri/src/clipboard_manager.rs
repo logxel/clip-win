@@ -723,7 +723,14 @@ impl ClipboardManager {
                 }
             } else if let Ok(()) = self.set_clipboard_external(
                 "xclip",
-                &["-selection", "clipboard", "-t", "UTF8_STRING"],
+                &[
+                    "-selection",
+                    "clipboard",
+                    "-t",
+                    "UTF8_STRING",
+                    "-loops",
+                    "0",
+                ],
                 text,
             ) {
                 return Ok(());
@@ -749,7 +756,7 @@ impl ClipboardManager {
                 }
             } else if let Ok(()) = self.set_clipboard_external(
                 "xclip",
-                &["-selection", "clipboard", "-t", "text/html"],
+                &["-selection", "clipboard", "-t", "text/html", "-loops", "0"],
                 html,
             ) {
                 let _ = self.set_text_robust(plain);
@@ -799,16 +806,168 @@ impl ClipboardManager {
                 ))
             }
             Ok(_) => {
-                // If it's still running or exited successfully, we assume it worked.
-                // For xclip/wl-copy, they often background themselves or stay alive to serve content.
-                if cmd == "xclip" {
-                    thread::spawn(move || {
-                        let _ = child.wait();
-                    });
-                }
+                // Detach the child process so it can continue serving the clipboard.
+                // xclip and wl-copy stay alive to serve content to paste requestors.
+                // We spawn a thread to reap the zombie once the process finally exits.
+                thread::spawn(move || {
+                    let _ = child.wait();
+                });
                 Ok(())
             }
             Err(e) => Err(format!("Process status check failed: {}", e)),
         }
+    }
+}
+
+// --- Tests ---
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    fn init_test_env() {
+        INIT.call_once(|| {
+            crate::session::init();
+        });
+    }
+
+    /// Helper: tries to get a system clipboard. Returns None if display server
+    /// is not available (e.g. headless CI).
+    fn try_get_clipboard() -> Option<Clipboard> {
+        get_system_clipboard().ok()
+    }
+
+    /// Test that set_text_robust persists clipboard data so it can be read back.
+    /// This verifies the fix for cross-window copy failure caused by xclip
+    /// exiting without `-loops 0` — the data must survive until a paste request.
+    #[test]
+    fn test_text_robust_persists_data() {
+        init_test_env();
+
+        // Only run if we have a functioning display server
+        let mut clipboard = match try_get_clipboard() {
+            Some(c) => c,
+            None => {
+                eprintln!("test_text_robust_persists_data: skipping — no display server available");
+                return;
+            }
+        };
+
+        let temp_dir = std::env::temp_dir().join("clip-win-test");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let history_path = temp_dir.join("test_history_persist.json");
+
+        let manager = ClipboardManager::new(history_path.clone(), 10);
+        let test_text = "persistence-test-42";
+
+        // Set text via robust path (which uses external tools on Linux)
+        manager
+            .set_text_robust(test_text)
+            .expect("set_text_robust should succeed");
+
+        // Small delay to ensure clipboard settles
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Read back the clipboard — data should still be there
+        let read_back = clipboard.get_text().expect("should read back text");
+
+        assert_eq!(
+            read_back, test_text,
+            "Clipboard data should persist after set_text_robust. \
+             Got '{}' instead of '{}'. \
+             This indicates the clipboard tool exited and lost the data.",
+            read_back, test_text
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_file(&history_path);
+    }
+
+    /// Test that set_html_robust persists HTML content.
+    #[test]
+    fn test_html_robust_persists_data() {
+        init_test_env();
+
+        let mut clipboard = match try_get_clipboard() {
+            Some(c) => c,
+            None => {
+                eprintln!("test_html_robust_persists_data: skipping — no display server available");
+                return;
+            }
+        };
+
+        let temp_dir = std::env::temp_dir().join("clip-win-test");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let history_path = temp_dir.join("test_history_html.json");
+
+        let manager = ClipboardManager::new(history_path.clone(), 10);
+        let html = "<b>bold text</b>";
+        let plain = "bold text";
+
+        // Set HTML via robust path
+        manager
+            .set_html_robust(html, plain)
+            .expect("set_html_robust should succeed");
+
+        // Small delay to ensure clipboard settles
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Verify plain text fallback is readable
+        let read_back = clipboard.get_text().expect("should read back text");
+
+        assert!(
+            read_back.contains("bold"),
+            "Plain text fallback should persist after set_html_robust. Got: '{}'",
+            read_back
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_file(&history_path);
+    }
+
+    /// Test that repeated set_text_robust calls work correctly
+    /// (verifies no regression from adding -loops 0 to xclip)
+    #[test]
+    fn test_repeated_set_text_robust() {
+        init_test_env();
+
+        let mut clipboard = match try_get_clipboard() {
+            Some(c) => c,
+            None => {
+                eprintln!("test_repeated_set_text_robust: skipping — no display server available");
+                return;
+            }
+        };
+
+        let temp_dir = std::env::temp_dir().join("clip-win-test");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let history_path = temp_dir.join("test_history_repeat.json");
+
+        let manager = ClipboardManager::new(history_path.clone(), 10);
+
+        for i in 0..5 {
+            let text = format!("repeat-test-{}", i);
+            manager.set_text_robust(&text).unwrap_or_else(|e| {
+                panic!("set_text_robust iteration {} should succeed: {}", i, e)
+            });
+
+            std::thread::sleep(Duration::from_millis(200));
+
+            let read_back = clipboard
+                .get_text()
+                .unwrap_or_else(|e| panic!("iteration {}: should read back text: {}", i, e));
+
+            assert_eq!(
+                read_back, text,
+                "Iteration {}: clipboard should contain '{}' but got '{}'",
+                i, text, read_back
+            );
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_file(&history_path);
     }
 }
