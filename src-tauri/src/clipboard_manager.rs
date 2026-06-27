@@ -938,6 +938,25 @@ mod tests {
         get_system_clipboard().ok()
     }
 
+    /// Poll the clipboard text with a timeout, sleeping `interval` between
+    /// attempts.  Returns the first successful read or an error if the deadline
+    /// expires.  Extracted as a helper to avoid duplicating the polling pattern
+    /// across multiple integration tests.
+    fn poll_clipboard_text(
+        clipboard: &mut Clipboard,
+        timeout: Duration,
+        interval: Duration,
+    ) -> Result<String, arboard::Error> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match clipboard.get_text() {
+                Ok(text) => return Ok(text),
+                Err(e) if Instant::now() >= deadline => return Err(e),
+                _ => std::thread::sleep(interval),
+            }
+        }
+    }
+
     fn make_manager(path: &str, max_size: usize) -> ClipboardManager {
         let unique_name = format!("clip-hist-test-{}_{}", path, Uuid::new_v4());
         let p = std::env::temp_dir().join(unique_name);
@@ -1110,18 +1129,11 @@ mod tests {
             .expect("set_text_robust should succeed");
 
         // Poll with timeout instead of fixed sleep
-        let deadline = Instant::now() + Duration::from_millis(2000);
-        let mut read_back = Err(arboard::Error::ContentNotAvailable);
-        while Instant::now() < deadline {
-            read_back = clipboard.get_text();
-            if read_back.is_ok() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        let read_back = poll_clipboard_text(&mut clipboard, Duration::from_millis(2000), Duration::from_millis(50))
+            .expect("clipboard should be readable within timeout");
 
         assert_eq!(
-            read_back.expect("clipboard should be readable within timeout"),
+            read_back,
             test_text,
             "Clipboard data should persist after set_text_robust"
         );
@@ -1149,21 +1161,13 @@ mod tests {
             .expect("set_html_robust should succeed");
 
         // Poll with timeout instead of fixed sleep
-        let deadline = Instant::now() + Duration::from_millis(2000);
-        let mut read_back = Err(arboard::Error::ContentNotAvailable);
-        while Instant::now() < deadline {
-            read_back = clipboard.get_text();
-            if read_back.is_ok() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        let read_back = poll_clipboard_text(&mut clipboard, Duration::from_millis(2000), Duration::from_millis(50))
+            .unwrap_or_default();
 
-        let text = read_back.unwrap_or_default();
         assert!(
-            text.contains("bold"),
+            read_back.contains("bold"),
             "Plain text fallback should persist after set_html_robust. Got: '{}'",
-            text
+            read_back
         );
     }
 
@@ -1190,18 +1194,11 @@ mod tests {
             });
 
             // Poll with timeout instead of fixed sleep
-            let deadline = Instant::now() + Duration::from_millis(2000);
-            let mut read_back = Err(arboard::Error::ContentNotAvailable);
-            while Instant::now() < deadline {
-                read_back = clipboard.get_text();
-                if read_back.is_ok() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
+            let read_back = poll_clipboard_text(&mut clipboard, Duration::from_millis(2000), Duration::from_millis(50))
+                .expect("clipboard should be readable within timeout");
 
             assert_eq!(
-                read_back.expect("clipboard should be readable within timeout"),
+                read_back,
                 text,
                 "Iteration {}: clipboard should contain '{}'",
                 i,
