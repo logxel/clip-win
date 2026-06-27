@@ -351,16 +351,51 @@ impl ClipboardManager {
     #[cfg(target_os = "linux")]
     fn get_text_via_wl_paste(&self) -> Option<String> {
         use std::process::Command;
-        let output = Command::new("wl-paste")
-            .args(["--no-newline"])
-            .output()
-            .ok()?;
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+
+        // Run wl-paste on a background thread so we can enforce a timeout and
+        // avoid blocking the caller indefinitely if wl-paste hangs (e.g., due
+        // to compositor/helper issues on Wayland).
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let result = Command::new("wl-paste").args(["--no-newline"]).output();
+            // Ignore send errors (e.g. if receiver was dropped due to timeout).
+            let _ = tx.send(result);
+        });
+
+        // Reasonable upper bound to avoid hanging the caller; adjust if needed.
+        let timeout = Duration::from_millis(500);
+
+        let output = match rx.recv_timeout(timeout) {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                eprintln!("[ClipboardManager] wl-paste failed to spawn: {}", e);
+                return None;
+            }
+            Err(_) => {
+                eprintln!("[ClipboardManager] wl-paste timed out after {:?}", timeout);
+                return None;
+            }
+        };
+
         if output.status.success() {
             let text = String::from_utf8_lossy(&output.stdout).to_string();
             if !text.is_empty() {
                 return Some(text);
             }
+            eprintln!("[ClipboardManager] wl-paste returned empty output");
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!(
+                "[ClipboardManager] wl-paste exited with {}: {}",
+                output.status,
+                stderr.trim()
+            );
         }
+
         None
     }
 
