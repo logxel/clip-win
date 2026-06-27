@@ -350,18 +350,47 @@ impl ClipboardManager {
 
     #[cfg(target_os = "linux")]
     fn get_text_via_wl_paste(&self) -> Option<String> {
-        use std::process::Command;
+        use std::process::{Command, Stdio};
+        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::mpsc;
         use std::thread;
         use std::time::Duration;
 
-        // Run wl-paste on a background thread so we can enforce a timeout and
-        // avoid blocking the caller indefinitely if wl-paste hangs (e.g., due
-        // to compositor/helper issues on Wayland).
+        // Circuit breaker: only one wl-paste background invocation at a time,
+        // preventing unbounded thread accumulation if wl-paste hangs repeatedly.
+        static WL_PASTE_RUNNING: AtomicBool = AtomicBool::new(false);
+        if WL_PASTE_RUNNING
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            eprintln!("[ClipboardManager] Skipping wl-paste: previous invocation still running");
+            return None;
+        }
+
+        // Spawn wl-paste with piped stdio so we hold a Child handle and can
+        // kill the process on timeout (unlike .output() which blocks forever).
+        let child = match Command::new("wl-paste")
+            .args(["--no-newline"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                // Release the circuit breaker since we won't spawn a thread.
+                WL_PASTE_RUNNING.store(false, Ordering::Release);
+                eprintln!("[ClipboardManager] wl-paste failed to spawn: {}", e);
+                return None;
+            }
+        };
+
+        let child_id = child.id();
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || {
-            let result = Command::new("wl-paste").args(["--no-newline"]).output();
+            let result = child.wait_with_output();
+            // Reset the circuit breaker so the next call can proceed.
+            WL_PASTE_RUNNING.store(false, Ordering::Release);
             // Ignore send errors (e.g. if receiver was dropped due to timeout).
             let _ = tx.send(result);
         });
@@ -372,11 +401,24 @@ impl ClipboardManager {
         let output = match rx.recv_timeout(timeout) {
             Ok(Ok(output)) => output,
             Ok(Err(e)) => {
-                eprintln!("[ClipboardManager] wl-paste failed to spawn: {}", e);
+                eprintln!("[ClipboardManager] wl-paste wait failed: {}", e);
                 return None;
             }
-            Err(_) => {
+            Err(mpsc::RecvTimeoutError::Timeout) => {
                 eprintln!("[ClipboardManager] wl-paste timed out after {:?}", timeout);
+                // Kill the hung wl-paste process so it does not linger. After
+                // this the spawned thread's wait_with_output() will return and
+                // automatically reap the child, releasing the circuit breaker.
+                let _ = Command::new("kill")
+                    .arg("-9")
+                    .arg(child_id.to_string())
+                    .output();
+                return None;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                eprintln!(
+                    "[ClipboardManager] wl-paste channel disconnected before receiving output"
+                );
                 return None;
             }
         };
