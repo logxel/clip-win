@@ -1,0 +1,489 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# PLAN: Fix Wayland ext_data_control clipboard backend issues (REVISED)
+# ═══════════════════════════════════════════════════════════════════════════
+plan_id: 20260716-fix-wayland-clipboard-issues
+objective: >
+  Fix validated issues in Wayland ext_data_control_v1 clipboard backend
+  (wayland_clipboard.rs + clipboard_manager.rs). Working tree already has
+  partial fixes for A (UB), E (MIME), F (VecDeque), B (deadline), G (empty),
+  H (image decode), I (SAFETY doc). Remaining substantive work: D (image
+  clear on selection), B/F generation-counter + per-source HashMap + source
+  lifetime tracking, C (wire set_text_robust native→wl-copy→arboard), J
+  (comprehensive tests). Multi-seat documented as known limitation.
+created_at: "2026-07-16T14:30:00Z"
+updated_at: "2026-07-16T15:45:00Z"
+created_by: gem-planner
+status: approved
+tldr: >
+  5 tasks across 4 waves. Wave_1: verify already-applied foundational fixes
+  (A,E,I,partial B/F,G,partial H) + add missing D. Wave_2: upgrade B/F to
+  generation counter + per-source HashMap + source lifecycle. Wave_3: wire
+  native Wayland set_text/set_html as primary path in set_text_robust with
+  wl-copy→arboard fallback. Wave_4: comprehensive unit tests.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PLAN-LEVEL METRICS
+# ═══════════════════════════════════════════════════════════════════════════
+plan_metrics:
+  wave_1_task_count: 2
+  total_dependencies: 5
+  risk_score: medium
+quality_warnings:
+  - "T1 and T3 both touch wayland_clipboard.rs — sequential waves prevent merge conflicts"
+  - "Working tree has partial fixes for A, E, F, B, G, H, I — verify before rework"
+  - "T3 combines B+F+source-lifetime into one task to avoid file contention, increasing scope"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PLANNING ANALYSIS (MEDIUM complexity)
+# ═══════════════════════════════════════════════════════════════════════════
+open_questions:
+  - question: "For per-source HashMap (Issue F), is ExtDataControlSourceV1.id() (u32 proxy id) stable across roundtrips for keying?"
+    context: >
+      Proxy .id() returns the wl_object id which is unique per object lifetime.
+      Since each set_text() creates a new proxy via create_data_source, the id
+      is unique. The Send handler receives the source proxy as argument — its
+      .id() matches the one used at creation time. This is confirmed working
+      in the wayland-client pattern.
+    type: decision_blocker
+    affects: [T3]
+  - question: "Does WaylandClipboard need a set_html() method for T4, or can set_text() with text/html offer suffice?"
+    context: >
+      Current set_text() already offers text/html MIME. For set_html_robust,
+      we need to offer text/html as primary. Two options: (a) add a set_html()
+      method that offers only text/html, or (b) modify set_text() to accept
+      an optional parameter for MIME priority. Prefer (a) for minimal change.
+    type: decision_blocker
+    affects: [T4]
+assumptions:
+  - "ExtDataControlSourceV1.id() returns a unique u32 per proxy creation — safe HashMap key"
+  - "Generation counter wraps at u64::MAX — impossible in single session"
+  - "Old ExtDataControlSourceV1 proxies that are superseded by new set_text calls should be explicitly destroyed to avoid compositor resource leaks"
+  - "Multi-seat scenario: currently uses devices.first(). This is acceptable for v1 — document as known limitation"
+  - "WaylandClipboard does not implement Clone — set_text_robust takes &mut self so access is fine"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TASKS
+# ═══════════════════════════════════════════════════════════════════════════
+tasks:
+
+  # ────────────────────────────────────────────────────────────────────────
+  # WAVE 1: T1 - Verify foundational fixes + add D
+  # ────────────────────────────────────────────────────────────────────────
+  - id: T1
+    title: "Verify foundational Wayland fixes (A, E, I) + add D"
+    description: >
+      Working tree already has fixes for A (queue_receive returns Option),
+      E (is_text_mime uses to_ascii_lowercase + starts_with), and I (SAFETY
+      comment expanded). T1 verifies these are correct and complete, then
+      adds the missing D fix.
+
+      A — VERIFY: queue_receive() returns Option<OwnedFd>. On pipe failure
+      returns None (no UB from_raw_fd(-1)). All callers in Offer handler
+      use 'if let Some(fd) = Self::queue_receive(...)'. Confirm no
+      remaining OwnedFd::from_raw_fd(-1) in file.
+      3 call sites in Offer handler (lines 262, 270, 278) already updated.
+
+      D — FIX: In Selection { id: None } handler (~line 224), add
+      'state.clipboard_image = None' alongside existing clipboard_text
+      and clipboard_html clears. This ensures stale image data doesn't
+      persist when clipboard switches to non-image content.
+
+      E — VERIFY: is_text_mime() matches "text/plain; charset=utf-8"
+      (space before charset), "text/plain;charset=UTF-8" (case variant),
+      "utf8_string", "text", "string". Rejects "text/html", "image/png",
+      "text/csv".
+
+      I — VERIFY: unsafe impl Send for WaylandClipboard has thorough
+      // SAFETY: comment documenting why Connection, EventQueue, and
+      WaylandState fields are Send. Confirm external Mutex synchronization
+      is mentioned.
+    wave: 1
+    agent: gem-implementer
+    status: pending
+    covers:
+      - "Issue A: OwnedFd::from_raw_fd(-1) UB in queue_receive (VERIFY already fixed)"
+      - "Issue D: clipboard_image not cleared on selection clear (FIX)"
+      - "Issue E: MIME type matching too strict (VERIFY already fixed)"
+      - "Issue I: unsafe impl Send needs SAFETY comment (VERIFY already fixed)"
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: src-tauri/src/wayland_clipboard.rs
+        description: "Lines 290-312 queue_receive, lines 318-325 is_text_mime, lines 223-227 Selection handler, lines 595-603 unsafe impl Send"
+    acceptance_criteria:
+      - "AC-A: queue_receive returns Option<OwnedFd>; None on pipe failure; no -1 passed to from_raw_fd"
+      - "AC-D: Selection { id: None } handler resets clipboard_image = None alongside text+html"
+      - "AC-E: is_text_mime('text/plain; charset=utf-8') == true (space before charset)"
+      - "AC-E: is_text_mime('text/plain;charset=UTF-8') == true (case variance)"
+      - "AC-E: is_text_mime('text/html') == false (HTML not text)"
+      - "AC-I: unsafe impl Send has detailed // SAFETY: comment covering all field types"
+    success_criteria:
+      - "cargo build --no-default-features passes on Linux"
+      - "cargo test --no-default-features passes for wayland_clipboard tests"
+      - "No unsafe { ...::from_raw_fd(-1) } in wayland_clipboard.rs"
+    tech_stack:
+      - Rust 2021, wayland-client 0.31, libc 0.2
+    test_coverage: "Existing MIME and error tests at L617-727 cover is_text_mime and error types"
+    handoff:
+      do_not_reinvestigate:
+        - "wayland_client Dispatch patterns (unchanged)"
+        - "roundtrip_and_flush mechanism (unchanged)"
+        - "Overall event queue architecture"
+      required_test_first: null
+      target_files:
+        - src-tauri/src/wayland_clipboard.rs
+      minimal_change: >
+        A: Verify only (already done in working tree).
+        D: One-line addition in Selection handler.
+        E: Verify only (already done in working tree).
+        I: Verify only (already done in working tree).
+      acceptance_checks:
+        - "cargo build passes with no warnings"
+        - "grep for from_raw_fd shows only valid fd paths (read_fd after successful pipe())"
+
+  # ────────────────────────────────────────────────────────────────────────
+  # WAVE 1: T2 - Verify clipboard_manager read-path fixes (G, H)
+  # ────────────────────────────────────────────────────────────────────────
+  - id: T2
+    title: "Verify clipboard_manager read-path fixes (G, H)"
+    description: >
+      Working tree already has fixes for G (get_current_text returns
+      Ok(String::new()) for empty clipboard) and H (get_current_image
+      reads raw bytes first, then decodes outside wayland borrow).
+
+      G — VERIFY: get_current_text() at ~line 462 returns
+      Ok(String::new()) when Wayland get_text() returns Ok(None) or
+      Ok(Some("")). Confirm it no longer returns
+      Err(arboard::Error::ContentNotAvailable) for empty clipboard,
+      avoiding unnecessary GTK fallback dispatch on every 500ms poll.
+
+      H — VERIFY: get_current_image() at ~line 674 uses a two-step
+      approach: first 'let raw_result = wayland_clipboard.get_image()'
+      (releasing the wayland_clipboard borrow), then matches on the
+      result and calls 'image::load_from_memory(&bytes)' outside the
+      wayland borrow scope. Hash calculation (calculate_hash) also
+      happens before decode, correct order.
+
+      Also verify that retry_wayland_init() is called in all three
+      read paths (get_current_text, get_current_html, get_current_image).
+    wave: 1
+    agent: gem-implementer
+    status: pending
+    covers:
+      - "Issue G: Empty clipboard returns Err instead of Ok(None) (VERIFY already fixed)"
+      - "Issue H: Image decode under manager lock (VERIFY already fixed)"
+    dependencies: []
+    conflicts_with: [T1]
+    context_files:
+      - path: src-tauri/src/clipboard_manager.rs
+        description: "get_current_text (L444-507), get_current_html (L589-624), get_current_image (L662-735)"
+    acceptance_criteria:
+      - "AC-G: get_current_text() returns Ok(String::new()) for empty clipboard, not Err"
+      - "AC-G: Normal clipboard reads still return Ok(text) with content"
+      - "AC-H: image::load_from_memory runs AFTER wayland_clipboard borrow is released"
+      - "AC-H: get_current_image returns correct (ImageData, hash) for valid images"
+      - "retry_wayland_init() called from get_current_text, get_current_html, get_current_image"
+    success_criteria:
+      - "cargo build passes"
+      - "No &mut wayland_clipboard borrow crosses image::load_from_memory call"
+      - "Empty clipboard polls no longer trigger GTK fallback in logs"
+    tech_stack:
+      - Rust 2021, arboard 3.4, image 0.25.10
+    test_coverage: null
+    handoff:
+      do_not_reinvestigate:
+        - "GTK clipboard read path (unchanged)"
+        - "arboard fallback logic (unchanged)"
+        - "History management and deduplication"
+      required_test_first: null
+      target_files:
+        - src-tauri/src/clipboard_manager.rs
+      minimal_change: >
+        Both G and H already fixed in working tree — verify only.
+        No code changes needed except edge-case fixes if found.
+      acceptance_checks:
+        - "get_current_text returns empty string for empty clipboard"
+        - "get_current_image still works for valid images"
+        - "image decode does not hold wayland_clipboard borrow"
+
+  # ────────────────────────────────────────────────────────────────────────
+  # WAVE 2: T3 - State management: generation counter, per-source HashMap,
+  #              source lifetime (B, F rework + source tracking)
+  # ────────────────────────────────────────────────────────────────────────
+  - id: T3
+    title: "Refactor state management — generation counter, per-source HashMap, source lifetime (B/F)"
+    description: >
+      Upgrade the partial fixes in working tree (owns_selection_deadline,
+      pending_set_text VecDeque) to proper robust implementations.
+      Three interrelated changes:
+
+      B1 — Generation counter: Replace 'owns_selection: bool' with
+      'selection_gen: u64' and per-seat 'expected_gen: HashMap<u32, u64>'.
+      Increment selection_gen on each set_text() call. In the Selection
+      handler, only suppress re-import if the incoming selection's gen
+      matches expected_gen for that seat. This prevents permanent stuck
+      detection better than a timeout deadline.
+      Remove owns_selection_deadline — superseded by generation counter.
+      Reset expected_gen for a seat on:
+      - DataOffer event (another app is offering data)
+      - Cancelled event (our source was cancelled)
+      - Finished event (seat removed — clear all)
+      
+      B2 — Source lifetime tracking: Add 'active_sources: Vec<ExtDataControlSourceV1>'
+      to WaylandState. When set_text() creates a new source, push it onto
+      active_sources. After device.set_selection(), destroy all OLD sources
+      in active_sources except the newest one. After Cancelled event,
+      remove the cancelled source from active_sources.
+      This prevents compositor-side resource leaks from orphaned sources.
+
+      F — Per-source pending buffer: Replace 'pending_set_text: VecDeque<String>'
+      with 'pending_by_source: HashMap<u32, String>' keyed by source.id().
+      In set_text(), store the text keyed by the new source's id.
+      In Event::Send handler, look up the text using the received source
+      proxy's id(), write it, then remove the entry.
+      
+      CONTRACT for T4:
+      - After T3, WaylandState exposes:
+          selection_gen: u64 (current generation)
+          expected_gen: HashMap<u32, u64> (per-seat expected generation)
+          pending_by_source: HashMap<u32, String> (per-source text)
+          active_sources: Vec<ExtDataControlSourceV1>
+      - set_text() returns Result<(), WaylandClipboardError> — unchanged
+        signature. Internally uses generation counter + HashMap.
+      - T4 can call set_text() without worrying about race conditions.
+    wave: 2
+    agent: gem-implementer
+    status: pending
+    covers:
+      - "Issue B: owns_selection stuck detection (rework deadline approach)"
+      - "Issue F: pending_set_text race on rapid writes (rework VecDeque approach)"
+      - "Source lifetime: orphaned ExtDataControlSourceV1 cleanup"
+    dependencies: [T1]
+    conflicts_with: []
+    context_files:
+      - path: src-tauri/src/wayland_clipboard.rs
+        description: "WaylandState struct, set_text(), Selection/DataOffer/Cancelled/Finished/Send handlers, roundtrip_and_flush"
+    acceptance_criteria:
+      - "AC-B: Generation counter prevents false owns_selection suppressions after timeout"
+      - "AC-B: Selection event from own write is still correctly suppressed (gen match)"
+      - "AC-B: DataOffer from another client resets expected_gen, allowing re-import"
+      - "AC-B: Cancelled and Finished events properly reset per-seat gen"
+      - "AC-F: Two rapid set_text() calls map to correct per-source text buffers"
+      - "AC-F: Event::Send handler retrieves correct pending text for its source"
+      - "AC-F: Cancelled event removes the cancelled source's pending entry"
+      - "AC-LT: Old sources in active_sources (all but newest) are .destroy()'d after set_selection"
+      - "AC-LT: No ExtDataControlSourceV1 leaks — all cancelled sources removed from active_sources"
+      - "No owns_selection: bool field remains (replaced by selection_gen + expected_gen)"
+      - "No pending_set_text: VecDeque<String> field remains (replaced by pending_by_source HashMap)"
+    success_criteria:
+      - "cargo build passes with no warnings"
+      - "cargo test passes for wayland_clipboard tests"
+      - "No boolean owns_selection field in WaylandState (use grep to confirm)"
+      - "No VecDeque pending_set_text field in WaylandState (use grep to confirm)"
+      - "active_sources vector properly manages source lifetimes"
+    tech_stack:
+      - Rust 2021, std::collections::HashMap, wayland-client 0.31
+    test_coverage: null
+    handoff:
+      do_not_reinvestigate:
+        - "roundtrip_and_flush mechanism (unchanged)"
+        - "Overall Dispatch architecture (unchanged)"
+        - "is_text_mime / is_image_mime (unchanged from T1)"
+        - "queue_receive (unchanged from T1)"
+      required_test_first: null
+      target_files:
+        - src-tauri/src/wayland_clipboard.rs
+      minimal_change: >
+        B: Replace owns_selection:bool + owns_selection_deadline with
+        selection_gen:u64 + expected_gen:HashMap<u32,u64>. Increment gen
+        in set_text, compare in Selection, reset on DataOffer/Cancelled/Finished.
+        F: Replace pending_set_text:VecDeque<String> with
+        pending_by_source:HashMap<u32,String>. Key by source.id().
+        Source lifetime: Add active_sources:Vec<ExtDataControlSourceV1>. In
+        set_text, push new source, destroy all but newest after set_selection.
+      acceptance_checks:
+        - "Two rapid set_text calls with different text both deliver correct data"
+        - "Compositor not echoing Selection (bug or race) doesn't cause permanent blind spot"
+        - "No VecDeque<String> or bool owns_selection remain in WaylandState"
+
+  # ────────────────────────────────────────────────────────────────────────
+  # WAVE 3: T4 - Wire native Wayland set_text/set_html into fallback chain
+  # ────────────────────────────────────────────────────────────────────────
+  - id: T4
+    title: "Wire WaylandClipboard::set_text() + set_html() into robust fallback chain (C)"
+    description: >
+      The central integration gap: WaylandClipboard::set_text() exists and
+      uses ext_data_control_v1 (zero transient surfaces, no Mutter blinking)
+      but is never called from set_text_robust(). Currently set_text_robust
+      goes straight to wl-copy.
+
+      Fallback chain for set_text_robust() (Wayland only):
+      1. WaylandClipboard::set_text() — native ext_data_control_v1, no
+         transient surfaces. If available+Ok → return.
+      2. wl-copy external process — existing fallback. If Ok → return.
+      3. arboard clipboard set_text — last resort. If Ok → return.
+      4. Err("clipboard not available") — unchanged.
+
+      Fallback chain for set_html_robust() (Wayland only):
+      1. WaylandClipboard::set_html() — new method on WaylandClipboard
+         that offers text/html as primary MIME. If available+Ok → return.
+      2. wl-copy with --type text/html — existing fallback. If Ok → return.
+      3. arboard clipboard set_html — last resort. If Ok → return.
+      4. Err("clipboard not available") — unchanged.
+
+      Implementation pattern (follow existing get_current_text access):
+      ```
+      #[cfg(target_os = "linux")]
+      if crate::session::is_wayland() {
+          if let Some(ref mut wayland_clipboard) = self.wayland_clipboard {
+              if wayland_clipboard.set_text(text).is_ok() {
+                  return Ok(());
+              }
+              // Fall through to wl-copy
+          }
+      }
+      ```
+
+      Add set_html() method to WaylandClipboard (wayland_clipboard.rs):
+      - Same as set_text() but offers text/html as primary MIME
+      - Uses the same generation counter + HashMap from T3
+      - Returns Result<(), WaylandClipboardError>
+
+      X11 path (xclip) remains unchanged.
+      Multi-seat: Document in method doc comment that only the first seat
+      (devices[0]) is used. Multi-seat support deferred.
+
+      NOTE: Depends on T3's cleaned-up state management API (generation
+      counter, per-source HashMap). T3 must complete first.
+    wave: 3
+    agent: gem-implementer
+    status: pending
+    covers:
+      - "Issue C: WaylandClipboard::set_text() is never called (missing integration)"
+      - "Add WaylandClipboard::set_html() for HTML clipboard writes"
+    dependencies: [T3]
+    conflicts_with: []
+    context_files:
+      - path: src-tauri/src/clipboard_manager.rs
+        description: "set_text_robust (L1106-1139), set_html_robust (L1143-1179)"
+      - path: src-tauri/src/wayland_clipboard.rs
+        description: "set_text (L552-592), WaylandState struct"
+    acceptance_criteria:
+      - "AC-C: set_text_robust on Wayland calls WaylandClipboard::set_text() before wl-copy"
+      - "AC-C: Native Wayland write path uses ext_data_control_v1 (no transient wl_surfaces)"
+      - "AC-C: Falls back to wl-copy if native backend unavailable or errors"
+      - "AC-C: Falls back to arboard if both native and wl-copy fail"
+      - "AC-C: set_html_robust similarly uses wayland_clipboard.set_html() as primary"
+      - "AC-C: set_html() on WaylandClipboard offers text/html as primary MIME"
+      - "AC-C: X11 path (xclip) completely unchanged"
+      - "AC-MS: Multi-seat limitation documented in method doc comment"
+    success_criteria:
+      - "cargo build passes with no warnings"
+      - "Wayland clipboard writes no longer spawn wl-copy when ext_data_control available"
+      - "set_text_robust integration test (set_text_robust_persists_data) passes on Wayland"
+      - "set_html_robust integration test (if exists) passes on Wayland"
+    tech_stack:
+      - Rust 2021, wayland-client 0.31, arboard 3.4
+    test_coverage: "Existing set_text_robust_persists_data test should pass via Wayland path"
+    handoff:
+      do_not_reinvestigate:
+        - "wl-copy/xclip external execution paths (only fallbacks now)"
+        - "GTK read path (unchanged)"
+        - "arboard fallback logic (unchanged)"
+        - "T3's state management internals (use T3's public API only)"
+      required_test_first: null
+      target_files:
+        - src-tauri/src/clipboard_manager.rs
+        - src-tauri/src/wayland_clipboard.rs
+      minimal_change: >
+        clipboard_manager.rs: Add Wayland set_text/set_html before wl-copy
+        in set_text_robust/set_html_robust. Follow existing get_current_text
+        access pattern for &mut wayland_clipboard.
+        wayland_clipboard.rs: Add set_html() method (similar to set_text but
+        primary MIME is text/html).
+      acceptance_checks:
+        - "On Wayland with ext_data_control, set_text_robust uses native path, not wl-copy"
+        - "All existing integration tests still pass"
+        - "Both set_text_robust and set_html_robust fallback chains documented"
+
+  # ────────────────────────────────────────────────────────────────────────
+  # WAVE 4: T5 - Comprehensive test coverage (J)
+  # ────────────────────────────────────────────────────────────────────────
+  - id: T5
+    title: "Add unit test coverage for all fixes (J)"
+    description: >
+      Add unit tests that run without a display server (pure logic tests)
+      covering all fixed and verified behaviors:
+
+      wayland_clipboard.rs (add to existing #[cfg(test)] mod):
+      - test_queue_receive_returns_option: Verify compile-time signature
+        (queue_receive returns Option<OwnedFd>). Also test that pipe
+        failure returns None (can mock via env var or trust type system).
+      - test_selection_clear_clears_image: Test that Selection { id: None }
+        resets clipboard_text, clipboard_html, AND clipboard_image.
+        Create a WaylandState with all three set, run the Selection handler
+        via simulated dispatch or direct state manipulation.
+      - test_generation_counter: Create WaylandState, call set_text
+        simulation, verify selection_gen increments, verify expected_gen
+        is set per-seat, verify DataOffer resets it.
+      - test_per_source_pending: Create WaylandState with pending_by_source
+        HashMap, simulate two set_text calls with different source IDs,
+        verify Event::Send looks up correct text by source id.
+      - test_source_lifetime: Create WaylandState with active_sources,
+        simulate set_text to create sources, verify old sources are marked
+        for destruction.
+      - test_is_text_mime (expanded): Already has basic tests — add edge
+        cases: empty string, null bytes, very long MIME with params.
+
+      clipboard_manager.rs (add to existing #[cfg(test)] mod):
+      - test_set_text_robust_fallback_order: Unit-test the logical
+        fallback chain ordering (mock the backends). Verify native →
+        wl-copy → arboard order on Wayland.
+      - test_empty_clipboard_no_err: Unit-test that get_current_text
+        returns Ok("") not Err when clipboard empty.
+      - test_multi_seat_limitation_documented: Verify doc comment mentions
+        multi-seat limitation (textual grep test).
+
+      All tests must pass in headless CI (no DISPLAY/Wayland compositor).
+    wave: 4
+    agent: gem-implementer
+    status: pending
+    covers:
+      - "Issue J: Minimal test coverage — add comprehensive unit tests"
+    dependencies: [T1, T2, T3, T4]
+    conflicts_with: []
+    context_files:
+      - path: src-tauri/src/wayland_clipboard.rs
+        description: "Test module at bottom (L605-727) — add new tests here"
+      - path: src-tauri/src/clipboard_manager.rs
+        description: "Test module at bottom (L1519+) — add new tests here"
+    acceptance_criteria:
+      - "AC-J: At least 6 new unit tests in wayland_clipboard.rs (selection clear, gen counter, per-source buffer, source lifetime, MIME edge cases, queue_receive signature)"
+      - "AC-J: At least 3 new unit tests in clipboard_manager.rs (fallback order, empty clipboard, multi-seat doc)"
+      - "AC-J: All tests pass without display server (no Wayland compositor, no X11)"
+      - "AC-J: No mocked or flaky tests — all use pure logic / direct state manipulation"
+      - "AC-J: Test names follow existing pattern: test_<feature>_<scenario>"
+    success_criteria:
+      - "cargo test passes for all new tests"
+      - "All tests pass in headless/GitHub CI environment (no DISPLAY variable)"
+      - "Code coverage of wayland_clipboard.rs logic paths meets at least 70% for non-connection code"
+    tech_stack:
+      - Rust 2021 test framework
+    test_coverage: "This task IS the test coverage task — adds tests for all fixed behaviors"
+    handoff:
+      do_not_reinvestigate:
+        - "Integration tests requiring display server (existing tests unchanged)"
+        - "Existing test patterns (fnv, manager helpers, poll_clipboard_text)"
+        - "Tauri command handlers (not unit testable without display server)"
+      required_test_first: null
+      target_files:
+        - src-tauri/src/wayland_clipboard.rs
+        - src-tauri/src/clipboard_manager.rs
+      minimal_change: >
+        Add test functions in existing #[cfg(test)] module blocks. Pure
+        logic tests only — manipulate WaylandState directly or use mock
+        data. No display server interaction.
+      acceptance_checks:
+        - "All tests pass with 'cargo test' on Linux (no Wayland compositor required)"
+        - "Test names match pattern: test_<feature>_<scenario>"
+        - "No test requires DISPLAY or WAYLAND_DISPLAY env vars"

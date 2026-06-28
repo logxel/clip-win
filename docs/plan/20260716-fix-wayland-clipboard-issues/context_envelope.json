@@ -1,0 +1,288 @@
+{
+  "context_envelope": {
+    "meta": {
+      "plan_id": "20260716-fix-wayland-clipboard-issues",
+      "created_at": "2026-07-16T14:30:00Z",
+      "last_updated": "2026-07-16T15:45:00Z",
+      "version": 2
+    },
+    "tech_stack": [
+      {
+        "name": "Rust",
+        "version": "edition 2021, min 1.77",
+        "usage_context": "Tauri backend in src-tauri/src/",
+        "config_files": ["src-tauri/Cargo.toml"]
+      },
+      {
+        "name": "wayland-client",
+        "version": "0.31",
+        "usage_context": "Wayland protocol connection, event dispatch, proxy types",
+        "config_files": ["src-tauri/Cargo.toml"]
+      },
+      {
+        "name": "wayland-protocols",
+        "version": "0.32 (staging)",
+        "usage_context": "ext_data_control_v1 protocol bindings for clipboard",
+        "config_files": ["src-tauri/Cargo.toml"]
+      },
+      {
+        "name": "arboard",
+        "version": "3.4",
+        "usage_context": "Fallback clipboard read/write; X11 primary; Wayland fallback for writes",
+        "config_files": ["src-tauri/Cargo.toml"]
+      },
+      {
+        "name": "image",
+        "version": "0.25.10",
+        "usage_context": "Image decoding (load_from_memory) for clipboard images",
+        "config_files": ["src-tauri/Cargo.toml"]
+      },
+      {
+        "name": "libc",
+        "version": "0.2",
+        "usage_context": "Low-level pipe() and close() syscalls for fd-based clipboard transfer",
+        "config_files": ["src-tauri/Cargo.toml"]
+      },
+      {
+        "name": "Tauri",
+        "version": "2.11.0",
+        "usage_context": "Desktop application framework (holds Mutex<ClipboardManager>)",
+        "config_files": ["src-tauri/tauri.conf.json"]
+      },
+      {
+        "name": "gtk",
+        "version": "0.18",
+        "usage_context": "GTK clipboard read fallback (must run on main thread)",
+        "config_files": ["src-tauri/Cargo.toml"]
+      }
+    ],
+    "conventions": [
+      "Error types implement std::error::Error + Display",
+      "Wayland Dispatch pattern uses event_created_child! for child proxy events",
+      "#[cfg(target_os = \"linux\")] guards all Wayland-specific code",
+      "crate::session::is_wayland() at runtime to select backend",
+      "unsafe blocks require // SAFETY: comment",
+      "Option<OwnedFd> for fd fields that may not be populated",
+      "Wayland state mutated directly via Dispatch (no Arc<Mutex>)",
+      "Proxy .id() returns u32 — stable identifier for HashMap keying"
+    ],
+    "constraints": {
+      "hard": [
+        "No transient wl_surfaces created for clipboard ops (causes Mutter taskbar blinking)",
+        "Wayland clipboard reads must not call arboard (creates per-call Wayland connections)",
+        "WaylandState is !Send — external Mutex provides thread safety",
+        "image::load_from_memory blocks — must not hold Tauri IPC lock during decode",
+        "ExtDataControlSourceV1 must be explicitly .destroy()'d or orphaned proxies leak compositor resources",
+        "GTK clipboard read (get_text_via_gtk) must run on main thread only"
+      ],
+      "soft": [
+        "Prefer additive changes over invasive refactors",
+        "Match existing code patterns for Wayland access (see get_current_text pattern)",
+        "MIME type comparisons should be lenient (real compositors vary whitespace/case)",
+        "Multi-seat: current impl uses devices[0] — document as OK for v1"
+      ],
+      "compatibility": [
+        "Must work on GNOME/Mutter (ext_data_control), KDE/KWin, Sway (wlr-data-control)",
+        "Must fallback to wl-copy + GTK when ext_data_control not available",
+        "X11 path (arboard + xclip) completely unchanged"
+      ],
+      "security_requirements": []
+    },
+    "architecture_snapshot": {
+      "key_dirs": [
+        "src-tauri/src/"
+      ],
+      "patterns": [
+        "Event-driven: WaylandState as Dispatch target, mutated via event_queue roundtrip",
+        "Pipe-based fd transfer: offer.receive(write_fd) -> compositor writes -> read from read_fd",
+        "Three-stage read: roundtrip -> dispatch -> read from stored fd -> cache in state",
+        "Preference chain: ext_data_control > GTK (main thread) > arboard > external tools",
+        "Wayland writes: create source -> offer MIMEs -> store text -> set_selection -> flush",
+        "Fallback chain for set_text_robust: native Wayland -> wl-copy -> arboard"
+      ],
+      "key_components": [
+        {
+          "name": "WaylandClipboard",
+          "location": "src-tauri/src/wayland_clipboard.rs:379",
+          "responsibility": [
+            "Connect to Wayland ext_data_control_manager_v1",
+            "Read clipboard text/html/image via pipe fd transfer",
+            "Write clipboard text via ext_data_control_source_v1",
+            "Dispatch Wayland events via EventQueue roundtrip",
+            "Track selection generation per-seat for own-write suppression"
+          ]
+        },
+        {
+          "name": "WaylandState",
+          "location": "src-tauri/src/wayland_clipboard.rs:69",
+          "responsibility": [
+            "Mutable state mutated by Dispatch implementations",
+            "Holds pending read fds (text/html/image)",
+            "Tracks clipboard cache (text/html/image)",
+            "Manages selection generation + per-source pending text + active sources for writes"
+          ]
+        },
+        {
+          "name": "ClipboardManager",
+          "location": "src-tauri/src/clipboard_manager.rs:238",
+          "responsibility": [
+            "Central clipboard ops: read text/html/image",
+            "Write ops: set_text_robust, set_html_robust, set_image_robust",
+            "History tracking, persistence, deduplication",
+            "Backend selection: ext_data_control > GTK > arboard > ext tools"
+          ]
+        }
+      ]
+    },
+    "research_digest": {
+      "current_state": {
+        "already_fixed_in_working_tree": [
+          "A: queue_receive returns Option<OwnedFd>, None on pipe failure — no UB",
+          "E: is_text_mime uses to_ascii_lowercase() + starts_with() — robust parsing",
+          "F: pending_set_text is VecDeque<String> (not Option) — rapid writes handled",
+          "B: owns_selection_deadline added (2s timeout) — partial mitigation",
+          "G: get_current_text returns Ok(String::new()) on empty clipboard",
+          "H: get_current_image decodes image outside wayland_clipboard borrow",
+          "I: unsafe impl Send has thorough 9-line SAFETY comment"
+        ],
+        "remaining_work": [
+          "D: clipboard_image = None missing in Selection handler",
+          "B: Upgrade deadline to generation counter + per-seat expected_gen",
+          "F: Upgrade VecDeque to per-source HashMap<u32, String>",
+          "Source lifetime: track + destroy old ExtDataControlSourceV1 proxies",
+          "C: Wire native set_text/set_html into set_text_robust fallback chain",
+          "J: Comprehensive unit test coverage"
+        ],
+        "multi_seat": "Documented limitation — uses devices[0] only"
+      },
+      "relevant_files": [
+        {
+          "path": "src-tauri/src/wayland_clipboard.rs",
+          "purpose": [
+            "Wayland ext_data_control_v1 backend",
+            "queue_receive (L290), is_text_mime (L318), Selection handler (L209), Send handler (L343)",
+            "set_text (L552), roundtrip_and_flush (L528), unsafe impl Send (L603)",
+            "WaylandState struct (L69) with owns_selection/pending_set_text fields"
+          ],
+          "confidence": 1.0
+        },
+        {
+          "path": "src-tauri/src/clipboard_manager.rs",
+          "purpose": [
+            "Clipboard manager orchestrator",
+            "get_current_text (L444), get_current_image (L662), get_current_html (L589)",
+            "set_text_robust (L1106), set_html_robust (L1143)",
+            "retry_wayland_init (L541), set_clipboard_external (L1181)"
+          ],
+          "confidence": 1.0
+        }
+      ],
+      "patterns_found": [
+        {
+          "name": "Wayland backend selection via cfg + runtime check",
+          "category": "Architecture pattern",
+          "confidence": 1.0,
+          "example_location": [
+            "clipboard_manager.rs:447-468",
+            "clipboard_manager.rs:305-322"
+          ]
+        },
+        {
+          "name": "Pipe-based fd clipboard transfer",
+          "category": "Implementation pattern",
+          "confidence": 1.0,
+          "example_location": [
+            "wayland_clipboard.rs:290-312 (queue_receive)",
+            "wayland_clipboard.rs:343-361 (Send handler)"
+          ]
+        },
+        {
+          "name": "Per-seat generation counter for own-write suppression",
+          "category": "Anti-pattern correction",
+          "confidence": 0.9,
+          "example_location": [
+            "wayland_clipboard.rs (planned — replaces owns_selection:bool)"
+          ]
+        },
+        {
+          "name": "Fallback chain with preference tiers",
+          "category": "Architecture pattern",
+          "confidence": 1.0,
+          "example_location": [
+            "clipboard_manager.rs:1106-1139 (set_text_robust chain)",
+            "clipboard_manager.rs:1143-1179 (set_html_robust chain)"
+          ]
+        }
+      ],
+      "gotchas": [
+        {
+          "text": "ExtDataControlSourceV1 proxy must be explicitly .destroy()'d — Wayland protocol objects live on queue until destroyed or connection drops; orphaned proxies leak compositor-side resources",
+          "confidence": 1.0
+        },
+        {
+          "text": "Proxy .id() returns u32 that is unique per object lifetime — safe HashMap key. Verified via wayland-client source: ObjectId is monotonically increasing per connection.",
+          "confidence": 0.95
+        },
+        {
+          "text": "image::load_from_memory can be expensive (decode + allocate) — working tree fix already ensures decode runs outside wayland_clipboard borrow, but Mutex is still held",
+          "confidence": 1.0
+        },
+        {
+          "text": "wl-copy external process creates transient wl_surfaces triggering Mutter assertions — the whole point of adding native ext_data_control write path",
+          "confidence": 1.0
+        },
+        {
+          "text": "Current working tree has uncommitted changes for A, E, F, B (partial), G, H, I — must verify before building on top",
+          "confidence": 1.0
+        }
+      ]
+    },
+    "prior_decisions": [
+      {
+        "decision": "Use ext_data_control_v1 instead of wl-copy/arboard for Wayland clipboard reads",
+        "rationale": [
+          "Avoids per-call Wayland socket connections causing Mutter assertions",
+          "Eliminates transient wl_surfaces that cause taskbar blinking on GNOME/Mutter"
+        ],
+        "confidence": 1.0
+      },
+      {
+        "decision": "Extend to writes: use ext_data_control_v1 for set_text_robust as primary path",
+        "rationale": [
+          "Same benefits as reads — no transient surfaces, no taskbar blink",
+          "WaylandClipboard::set_text() already exists but was never wired",
+          "Falls back to wl-copy then arboard for robustness"
+        ],
+        "confidence": 1.0
+      },
+      {
+        "decision": "Generation counter over bool+deadline for owns_selection",
+        "rationale": [
+          "Deadline is a heuristic — gen counter is deterministic",
+          "Each set_text gets unique gen count, Selection handler compares directly",
+          "DataOffer/Cancelled events properly reset per-seat expectation"
+        ],
+        "confidence": 0.95
+      },
+      {
+        "decision": "Per-source HashMap over VecDeque for pending text",
+        "rationale": [
+          "Event::Send receives a specific source proxy — HashMap keyed by source.id() is exact match",
+          "VecDeque assumes FIFO order which may not match compositor event ordering",
+          "Each source's text is independently tracked, no ordering ambiguity"
+        ],
+        "confidence": 0.95
+      }
+    ],
+    "reuse_notes": [
+      {
+        "path": "src-tauri/src/wayland_clipboard.rs",
+        "trust": "high"
+      },
+      {
+        "path": "src-tauri/src/clipboard_manager.rs",
+        "trust": "high"
+      }
+    ]
+  }
+}
