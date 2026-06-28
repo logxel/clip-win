@@ -10,6 +10,8 @@ export function useHistoryKeyboardNavigation(params: {
   setFocusedIndex: (i: number) => void
   historyItemRefs: MutableRefObject<(HTMLElement | null)[]>
   tabBarRef: RefObject<TabBarRef | null>
+  onUpFromFirstItem?: () => boolean
+  onLeftArrow?: () => void
   searchInputRef: RefObject<HTMLInputElement | null>
 }) {
   const {
@@ -19,6 +21,8 @@ export function useHistoryKeyboardNavigation(params: {
     setFocusedIndex,
     historyItemRefs,
     tabBarRef,
+    onUpFromFirstItem,
+    onLeftArrow,
     searchInputRef,
   } = params
 
@@ -26,9 +30,9 @@ export function useHistoryKeyboardNavigation(params: {
     if (activeTab !== 'clipboard' || itemsLength === 0) return
 
     const handleArrowKeys = (e: KeyboardEvent) => {
-      // Check if a tab button is focused - if so, don't intercept arrows
       const activeElement = document.activeElement
       if (activeElement?.getAttribute('role') === 'tab') return
+      if (activeElement?.tagName === 'INPUT') return
 
       // Check if focus is on a history item, body, or search input
       const isOnHistoryItem =
@@ -47,6 +51,7 @@ export function useHistoryKeyboardNavigation(params: {
         e.preventDefault()
         if (isOnSearchInput) return
         if (focusedIndex === 0) {
+          if (onUpFromFirstItem?.()) return
           searchInputRef.current?.focus()
           return
         }
@@ -54,6 +59,11 @@ export function useHistoryKeyboardNavigation(params: {
         setFocusedIndex(newIndex)
         historyItemRefs.current[newIndex]?.focus()
         historyItemRefs.current[newIndex]?.scrollIntoView({ block: 'nearest' })
+      } else if (e.key === 'ArrowLeft') {
+        if (onLeftArrow) {
+          e.preventDefault()
+          onLeftArrow()
+        }
       } else if (e.key === 'Home') {
         e.preventDefault()
         setFocusedIndex(0)
@@ -66,7 +76,6 @@ export function useHistoryKeyboardNavigation(params: {
         historyItemRefs.current[lastIndex]?.focus()
         historyItemRefs.current[lastIndex]?.scrollIntoView({ block: 'nearest' })
       } else if (e.key === 'Tab' && !e.shiftKey) {
-        // When pressing Tab on a history item, go back to the tab bar
         e.preventDefault()
         tabBarRef.current?.focusFirstTab()
       }
@@ -81,6 +90,8 @@ export function useHistoryKeyboardNavigation(params: {
     setFocusedIndex,
     historyItemRefs,
     tabBarRef,
+    onUpFromFirstItem,
+    onLeftArrow,
     searchInputRef,
   ])
 }
