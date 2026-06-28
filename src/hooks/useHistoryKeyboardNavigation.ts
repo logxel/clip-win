@@ -10,9 +10,17 @@ export function useHistoryKeyboardNavigation(params: {
   setFocusedIndex: (i: number) => void
   historyItemRefs: MutableRefObject<(HTMLElement | null)[]>
   tabBarRef: RefObject<TabBarRef | null>
+  searchInputRef: RefObject<HTMLInputElement | null>
 }) {
-  const { activeTab, itemsLength, focusedIndex, setFocusedIndex, historyItemRefs, tabBarRef } =
-    params
+  const {
+    activeTab,
+    itemsLength,
+    focusedIndex,
+    setFocusedIndex,
+    historyItemRefs,
+    tabBarRef,
+    searchInputRef,
+  } = params
 
   useEffect(() => {
     if (activeTab !== 'clipboard' || itemsLength === 0) return
@@ -21,23 +29,27 @@ export function useHistoryKeyboardNavigation(params: {
       // Check if a tab button is focused - if so, don't intercept arrows
       const activeElement = document.activeElement
       if (activeElement?.getAttribute('role') === 'tab') return
-      // Check if search bar is focused
-      if (activeElement?.tagName === 'INPUT') return
 
-      // Check if focus is on a history item or body
+      // Check if focus is on a history item, body, or search input
       const isOnHistoryItem =
         historyItemRefs.current.some((ref) => ref === activeElement) ||
         activeElement === document.body
-      if (!isOnHistoryItem) return
+      const isOnSearchInput = activeElement === searchInputRef.current
+      if (!isOnHistoryItem && !isOnSearchInput) return
 
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        const newIndex = Math.min(focusedIndex + 1, itemsLength - 1)
+        const newIndex = isOnSearchInput ? 0 : Math.min(focusedIndex + 1, itemsLength - 1)
         setFocusedIndex(newIndex)
         historyItemRefs.current[newIndex]?.focus()
         historyItemRefs.current[newIndex]?.scrollIntoView({ block: 'nearest' })
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
+        if (isOnSearchInput) return
+        if (focusedIndex === 0) {
+          searchInputRef.current?.focus()
+          return
+        }
         const newIndex = Math.max(focusedIndex - 1, 0)
         setFocusedIndex(newIndex)
         historyItemRefs.current[newIndex]?.focus()
@@ -62,5 +74,13 @@ export function useHistoryKeyboardNavigation(params: {
 
     globalThis.addEventListener('keydown', handleArrowKeys)
     return () => globalThis.removeEventListener('keydown', handleArrowKeys)
-  }, [activeTab, itemsLength, focusedIndex, setFocusedIndex, historyItemRefs, tabBarRef])
+  }, [
+    activeTab,
+    itemsLength,
+    focusedIndex,
+    setFocusedIndex,
+    historyItemRefs,
+    tabBarRef,
+    searchInputRef,
+  ])
 }

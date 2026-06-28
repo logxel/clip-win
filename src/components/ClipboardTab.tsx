@@ -146,17 +146,16 @@ export function ClipboardTab(props: {
       // Instant filtering: start typing to activate search
       if (isPrintableKey(e)) {
         e.preventDefault()
-        // Show search bar and append the typed character
         if (!isSearchVisible) {
           setIsSearchVisible(true)
           setSearchQuery(e.key)
         } else {
           setSearchQuery((prev) => prev + e.key)
+          searchInputRef.current?.focus()
         }
-        // Focus will be set by the useEffect that watches isSearchVisible
       }
     },
-    [isSearchVisible, isPrintableKey]
+    [isSearchVisible, isPrintableKey, searchInputRef]
   )
 
   // Listen for Ctrl+F
@@ -225,7 +224,14 @@ export function ClipboardTab(props: {
     setFocusedIndex,
     historyItemRefs,
     tabBarRef,
+    searchInputRef,
   })
+
+  // Reset focused index when filtered results change
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFocusedIndex(0)
+  }, [filteredHistory])
 
   // Ref for stable access to filtered history in event listener
   const filteredHistoryRef = useRef(filteredHistory)
