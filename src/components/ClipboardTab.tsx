@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { clsx } from 'clsx'
+import { Pin, History, ChevronDown } from 'lucide-react'
 
 import type { ClipboardItem, UserSettings } from '../types/clipboard'
 import type { TabBarRef } from './TabBar'
@@ -60,6 +61,19 @@ export function ClipboardTab(props: {
   // Refs
   const historyItemRefs = useRef<(HTMLDivElement | null)[]>([])
 
+  // Pinned section collapsible state (persisted)
+  const [pinnedExpanded, setPinnedExpanded] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('clipboard-pinned-expanded')
+      return stored !== null ? stored === 'true' : true
+    }
+    return true
+  })
+
+  useEffect(() => {
+    localStorage.setItem('clipboard-pinned-expanded', String(pinnedExpanded))
+  }, [pinnedExpanded])
+
   // Check if a key is a printable character that should trigger search
   const isPrintableKey = useCallback((e: KeyboardEvent): boolean => {
     // Skip if any modifier key is pressed (except Shift for uppercase/symbols)
@@ -106,7 +120,6 @@ export function ClipboardTab(props: {
     ]
     if (specialKeys.includes(e.key)) return false
 
-    // Accept single printable characters (letters, numbers, symbols)
     return e.key.length === 1
   }, [])
 
@@ -137,29 +150,25 @@ export function ClipboardTab(props: {
         return
       }
 
-      // Skip instant filtering if focus is on an input element (user is already typing in search)
+      // Skip if focus is on an input or tab (those have their own handlers)
       if (activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA') return
-
-      // Skip if focus is on a tab button (let tab navigation handle it)
       if (activeElement?.getAttribute('role') === 'tab') return
 
       // Instant filtering: start typing to activate search
       if (isPrintableKey(e)) {
         e.preventDefault()
-        // Show search bar and append the typed character
         if (!isSearchVisible) {
           setIsSearchVisible(true)
           setSearchQuery(e.key)
         } else {
           setSearchQuery((prev) => prev + e.key)
         }
-        // Focus will be set by the useEffect that watches isSearchVisible
       }
     },
     [isSearchVisible, isPrintableKey]
   )
 
-  // Listen for Ctrl+F
+  // Listen for Ctrl+F keybinding
   useEffect(() => {
     globalThis.addEventListener('keydown', handleKeyDown)
     return () => globalThis.removeEventListener('keydown', handleKeyDown)
@@ -172,7 +181,7 @@ export function ClipboardTab(props: {
     }
   }, [isSearchVisible])
 
-  // Reset search when window is shown (app reopened)
+  // Reset search when window is shown (reopened)
   useEffect(() => {
     const resetSearch = () => {
       setIsSearchVisible(false)
@@ -184,7 +193,7 @@ export function ClipboardTab(props: {
     }
   }, [])
 
-  // Filter history
+  // Filter history by search query
   const filteredHistory = useMemo(() => {
     if (!searchQuery) return history
 
@@ -217,14 +226,45 @@ export function ClipboardTab(props: {
     })
   }, [history, searchQuery, isRegexMode])
 
+  // Split into pinned / unpinned sections
+  const pinnedItems = useMemo(() => filteredHistory.filter((i) => i.pinned), [filteredHistory])
+  const unpinnedItems = useMemo(() => filteredHistory.filter((i) => !i.pinned), [filteredHistory])
+
+  const showSections = !searchQuery && pinnedItems.length > 0
+
+  // Flat item array for keyboard navigation
+  const visibleItems = showSections && !pinnedExpanded ? unpinnedItems : filteredHistory
+
+  // Keyboard navigation callbacks for section collapse/expand
+  const onUpFromFirstItem = useCallback(() => {
+    if (showSections && !pinnedExpanded) {
+      setPinnedExpanded(true)
+      const lastIdx = pinnedItems.length - 1
+      setFocusedIndex(lastIdx)
+      setTimeout(() => historyItemRefs.current[lastIdx]?.focus(), 0)
+      return true
+    }
+    return false
+  }, [showSections, pinnedExpanded, pinnedItems.length])
+
+  const onLeftArrow = useCallback(() => {
+    if (showSections && pinnedExpanded && focusedIndex < pinnedItems.length) {
+      setPinnedExpanded(false)
+      setFocusedIndex(0)
+      setTimeout(() => historyItemRefs.current[0]?.focus(), 0)
+    }
+  }, [showSections, pinnedExpanded, focusedIndex, pinnedItems.length])
+
   // Keyboard navigation
   useHistoryKeyboardNavigation({
-    activeTab: 'clipboard', // Always 'clipboard' when this component is mounted
-    itemsLength: filteredHistory.length,
+    activeTab: 'clipboard',
+    itemsLength: visibleItems.length,
     focusedIndex,
     setFocusedIndex,
     historyItemRefs,
     tabBarRef,
+    onUpFromFirstItem,
+    onLeftArrow,
   })
 
   // Ref for stable access to filtered history in event listener
@@ -270,7 +310,6 @@ export function ClipboardTab(props: {
         isCompact={isCompact}
         onToggleCompact={() => setIsCompact(!isCompact)}
       />
-      {/* Search Bar - only visible when Ctrl+F is pressed */}
       {isSearchVisible && (
         <div className="px-3 pb-2 pt-1">
           <SearchBar
@@ -298,25 +337,55 @@ export function ClipboardTab(props: {
               isDark ? 'text-win11-text-secondary' : 'text-win11Light-text-secondary'
             )}
           >
-            No items found
+            {searchQuery ? 'No items found' : 'No clipboard history yet'}
           </p>
         </div>
       ) : (
         <div className="flex flex-col gap-2 p-3" role="listbox" aria-label="Clipboard history">
-          {filteredHistory.map((item, index) => (
+          {showSections && (
+            <button
+              onClick={() => {
+                const willCollapse = pinnedExpanded
+                setPinnedExpanded(!pinnedExpanded)
+                if (willCollapse) {
+                  setFocusedIndex(0)
+                  setTimeout(() => historyItemRefs.current[0]?.focus(), 0)
+                }
+              }}
+              className={clsx(
+                'flex items-center gap-1.5 px-1 py-1 text-xs font-medium',
+                'dark:text-win11-text-tertiary text-win11Light-text-tertiary',
+                'hover:dark:text-win11-text-secondary hover:text-win11Light-text-secondary',
+                'rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-win11-bg-accent'
+              )}
+              aria-expanded={pinnedExpanded}
+            >
+              <Pin size={12} />
+              <span>Pinned</span>
+              <span className="ml-auto opacity-60">{pinnedItems.length}</span>
+              <ChevronDown
+                size={12}
+                className={clsx(
+                  'transition-transform duration-150',
+                  !pinnedExpanded && '-rotate-90'
+                )}
+              />
+            </button>
+          )}
+          {pinnedExpanded && pinnedItems.map((item, offset) => (
             <HistoryItem
               key={item.id}
               ref={(el) => {
-                historyItemRefs.current[index] = el
+                historyItemRefs.current[offset] = el
               }}
               item={item}
-              index={index}
-              isFocused={index === focusedIndex}
+              index={offset}
+              isFocused={offset === focusedIndex}
               onPaste={onPaste}
               onPasteTextMode={onPasteTextMode}
               onDelete={deleteItem}
               onTogglePin={togglePin}
-              onFocus={() => setFocusedIndex(index)}
+              onFocus={() => setFocusedIndex(offset)}
               isDark={isDark}
               secondaryOpacity={secondaryOpacity}
               isCompact={isCompact}
@@ -324,6 +393,36 @@ export function ClipboardTab(props: {
               enableUiPolish={settings.enable_ui_polish}
             />
           ))}
+          {showSections && unpinnedItems.length > 0 && (
+            <div className="flex items-center gap-1.5 px-1 py-1 text-xs dark:text-win11-text-tertiary text-win11Light-text-tertiary">
+              <History size={12} />
+              <span>Recent</span>
+              <span className="ml-auto opacity-60">{unpinnedItems.length}</span>
+            </div>
+          )}
+          {unpinnedItems.map((item, offset) => {
+            const idx = showSections && pinnedExpanded ? pinnedItems.length + offset : offset
+            return (
+              <HistoryItem
+                key={item.id}
+                ref={(el) => {
+                  historyItemRefs.current[idx] = el
+                }}
+                item={item}
+                index={idx}
+                isFocused={idx === focusedIndex}
+                onPaste={onPaste}
+                onDelete={deleteItem}
+                onTogglePin={togglePin}
+                onFocus={() => setFocusedIndex(idx)}
+                isDark={isDark}
+                secondaryOpacity={secondaryOpacity}
+                isCompact={isCompact}
+                enableSmartActions={settings.enable_smart_actions}
+                enableUiPolish={settings.enable_ui_polish}
+              />
+            )
+          })}
         </div>
       )}
     </>
