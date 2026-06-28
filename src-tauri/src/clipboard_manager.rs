@@ -997,23 +997,14 @@ impl ClipboardManager {
         #[cfg(target_os = "linux")]
         {
             if crate::session::is_wayland() {
-                if let Ok(()) = self.set_clipboard_external_bytes(
-                    "wl-copy",
-                    &["--type", "image/png"],
-                    &bytes,
-                ) {
+                if let Ok(()) =
+                    self.set_clipboard_external_bytes("wl-copy", &["--type", "image/png"], &bytes)
+                {
                     return Ok(());
                 }
             } else if let Ok(()) = self.set_clipboard_external_bytes(
                 "xclip",
-                &[
-                    "-selection",
-                    "clipboard",
-                    "-t",
-                    "image/png",
-                    "-loops",
-                    "0",
-                ],
+                &["-selection", "clipboard", "-t", "image/png", "-loops", "0"],
                 &bytes,
             ) {
                 return Ok(());
@@ -1022,8 +1013,8 @@ impl ClipboardManager {
 
         // Fallback to arboard
         let mut clipboard = get_system_clipboard()?;
-        let img = image::load_from_memory(&bytes)
-            .map_err(|e| format!("Image load failed: {}", e))?;
+        let img =
+            image::load_from_memory(&bytes).map_err(|e| format!("Image load failed: {}", e))?;
         let rgba = img.to_rgba8();
         let image_data = ImageData {
             width: rgba.width() as usize,
