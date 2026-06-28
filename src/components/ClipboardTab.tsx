@@ -51,7 +51,9 @@ export function ClipboardTab(props: {
   })
 
   useEffect(() => {
-    localStorage.setItem('clipboard-history-compact-mode', String(isCompact))
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('clipboard-history-compact-mode', String(isCompact))
+    }
   }, [isCompact])
   const [isSearchVisible, setIsSearchVisible] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -71,7 +73,9 @@ export function ClipboardTab(props: {
   })
 
   useEffect(() => {
-    localStorage.setItem('clipboard-pinned-expanded', String(pinnedExpanded))
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('clipboard-pinned-expanded', String(pinnedExpanded))
+    }
   }, [pinnedExpanded])
 
   // Check if a key is a printable character that should trigger search
@@ -342,22 +346,23 @@ export function ClipboardTab(props: {
         </div>
       ) : (
         <div className="flex flex-col gap-2 p-3" role="listbox" aria-label="Clipboard history">
-          {showSections && (
-            <button
-              onClick={() => {
-                const willCollapse = pinnedExpanded
-                setPinnedExpanded(!pinnedExpanded)
-                if (willCollapse) {
-                  setFocusedIndex(0)
-                  setTimeout(() => historyItemRefs.current[0]?.focus(), 0)
-                }
-              }}
-              className={clsx(
-                'flex items-center gap-1.5 px-1 py-1 text-xs font-medium',
-                'dark:text-win11-text-tertiary text-win11Light-text-tertiary',
-                'hover:dark:text-win11-text-secondary hover:text-win11Light-text-secondary',
-                'rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-win11-bg-accent'
-              )}
+          {showSections ? (
+            <>
+              <button
+                onClick={() => {
+                  const willCollapse = pinnedExpanded
+                  setPinnedExpanded(!pinnedExpanded)
+                  if (willCollapse) {
+                    setFocusedIndex(0)
+                    setTimeout(() => historyItemRefs.current[0]?.focus(), 0)
+                  }
+                }}
+                className={clsx(
+                  'flex items-center gap-1.5 px-1 py-1 text-xs font-medium',
+                  'dark:text-win11-text-tertiary text-win11Light-text-tertiary',
+                  'hover:dark:text-win11-text-secondary hover:text-win11Light-text-secondary',
+                  'rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-win11-bg-accent'
+                )}
               aria-expanded={pinnedExpanded}
             >
               <Pin size={12} />
@@ -371,59 +376,82 @@ export function ClipboardTab(props: {
                 )}
               />
             </button>
-          )}
-          {pinnedExpanded && pinnedItems.map((item, offset) => (
-            <HistoryItem
-              key={item.id}
-              ref={(el) => {
-                historyItemRefs.current[offset] = el
-              }}
-              item={item}
-              index={offset}
-              isFocused={offset === focusedIndex}
-              onPaste={onPaste}
-              onPasteTextMode={onPasteTextMode}
-              onDelete={deleteItem}
-              onTogglePin={togglePin}
-              onFocus={() => setFocusedIndex(offset)}
-              isDark={isDark}
-              secondaryOpacity={secondaryOpacity}
-              isCompact={isCompact}
-              enableSmartActions={settings.enable_smart_actions}
-              enableUiPolish={settings.enable_ui_polish}
-            />
-          ))}
-          {showSections && unpinnedItems.length > 0 && (
-            <div className="flex items-center gap-1.5 px-1 py-1 text-xs dark:text-win11-text-tertiary text-win11Light-text-tertiary">
-              <History size={12} />
-              <span>Recent</span>
-              <span className="ml-auto opacity-60">{unpinnedItems.length}</span>
-            </div>
-          )}
-          {unpinnedItems.map((item, offset) => {
-            const idx = showSections && pinnedExpanded ? pinnedItems.length + offset : offset
-            return (
+            {pinnedExpanded && pinnedItems.map((item, offset) => (
               <HistoryItem
                 key={item.id}
                 ref={(el) => {
-                  historyItemRefs.current[idx] = el
+                  historyItemRefs.current[offset] = el
                 }}
                 item={item}
-                index={idx}
-                isFocused={idx === focusedIndex}
+                index={offset}
+                isFocused={offset === focusedIndex}
                 onPaste={onPaste}
                 onPasteTextMode={onPasteTextMode}
                 onDelete={deleteItem}
                 onTogglePin={togglePin}
-                onFocus={() => setFocusedIndex(idx)}
+                onFocus={() => setFocusedIndex(offset)}
                 isDark={isDark}
                 secondaryOpacity={secondaryOpacity}
                 isCompact={isCompact}
                 enableSmartActions={settings.enable_smart_actions}
                 enableUiPolish={settings.enable_ui_polish}
               />
-            )
-          })}
+            ))}
+            {unpinnedItems.length > 0 && (
+              <div className="flex items-center gap-1.5 px-1 py-1 text-xs dark:text-win11-text-tertiary text-win11Light-text-tertiary">
+                <History size={12} />
+                <span>Recent</span>
+                <span className="ml-auto opacity-60">{unpinnedItems.length}</span>
+              </div>
+            )}
+            {unpinnedItems.map((item, offset) => {
+              const idx = pinnedItems.length + offset
+              return (
+                <HistoryItem
+                  key={item.id}
+                  ref={(el) => {
+                    historyItemRefs.current[idx] = el
+                  }}
+                  item={item}
+                  index={idx}
+                  isFocused={idx === focusedIndex}
+                  onPaste={onPaste}
+                  onPasteTextMode={onPasteTextMode}
+                  onDelete={deleteItem}
+                  onTogglePin={togglePin}
+                  onFocus={() => setFocusedIndex(idx)}
+                  isDark={isDark}
+                  secondaryOpacity={secondaryOpacity}
+                  isCompact={isCompact}
+                  enableSmartActions={settings.enable_smart_actions}
+                  enableUiPolish={settings.enable_ui_polish}
+                />
+              )
+            })}
+          </>
+        ) : (
+          filteredHistory.map((item, idx) => (
+            <HistoryItem
+              key={item.id}
+              ref={(el) => {
+                historyItemRefs.current[idx] = el
+              }}
+              item={item}
+              index={idx}
+              isFocused={idx === focusedIndex}
+              onPaste={onPaste}
+              onPasteTextMode={onPasteTextMode}
+              onDelete={deleteItem}
+              onTogglePin={togglePin}
+              onFocus={() => setFocusedIndex(idx)}
+              isDark={isDark}
+              secondaryOpacity={secondaryOpacity}
+              isCompact={isCompact}
+              enableSmartActions={settings.enable_smart_actions}
+              enableUiPolish={settings.enable_ui_polish}
+            />
+          ))
+        )}
         </div>
       )}
     </>
