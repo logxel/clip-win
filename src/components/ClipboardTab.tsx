@@ -412,6 +412,7 @@ export function ClipboardTab(props: {
                 index={idx}
                 isFocused={idx === focusedIndex}
                 onPaste={onPaste}
+                onPasteTextMode={onPasteTextMode}
                 onDelete={deleteItem}
                 onTogglePin={togglePin}
                 onFocus={() => setFocusedIndex(idx)}
