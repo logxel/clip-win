@@ -1011,25 +1011,25 @@ impl ClipboardManager {
 
         #[cfg(target_os = "linux")]
         {
+            // Convert to PNG so the MIME type matches image/png passed to xclip/wl-copy.
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("Image decode failed: {}", e))?;
+            let mut png_bytes = Vec::new();
+            img.write_to(&mut Cursor::new(&mut png_bytes), ImageFormat::Png)
+                .map_err(|e| format!("PNG encode failed: {}", e))?;
+
             if crate::session::is_wayland() {
                 if let Ok(()) = self.set_clipboard_external_bytes(
                     "wl-copy",
                     &["--type", "image/png"],
-                    &bytes,
+                    &png_bytes,
                 ) {
                     return Ok(());
                 }
             } else if let Ok(()) = self.set_clipboard_external_bytes(
                 "xclip",
-                &[
-                    "-selection",
-                    "clipboard",
-                    "-t",
-                    "image/png",
-                    "-loops",
-                    "0",
-                ],
-                &bytes,
+                &["-selection", "clipboard", "-t", "image/png", "-loops", "0"],
+                &png_bytes,
             ) {
                 return Ok(());
             }
@@ -1037,8 +1037,8 @@ impl ClipboardManager {
 
         // Fallback to arboard
         let mut clipboard = get_system_clipboard()?;
-        let img = image::load_from_memory(&bytes)
-            .map_err(|e| format!("Image load failed: {}", e))?;
+        let img =
+            image::load_from_memory(&bytes).map_err(|e| format!("Image load failed: {}", e))?;
         let rgba = img.to_rgba8();
         let image_data = ImageData {
             width: rgba.width() as usize,
