@@ -51,8 +51,10 @@ export function useHistoryKeyboardNavigation(params: {
         historyItemRefs.current[newIndex]?.focus()
         historyItemRefs.current[newIndex]?.scrollIntoView({ block: 'nearest' })
       } else if (e.key === 'ArrowLeft') {
-        e.preventDefault()
-        onLeftArrow?.()
+        if (onLeftArrow) {
+          e.preventDefault()
+          onLeftArrow()
+        }
       } else if (e.key === 'Home') {
         e.preventDefault()
         setFocusedIndex(0)
