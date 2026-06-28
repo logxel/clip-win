@@ -803,13 +803,8 @@ impl ClipboardManager {
                 // Set HTML with plain text as fallback - this preserves formatting
                 self.set_html_robust(html, plain)?;
             }
-            ClipboardContent::Image {
-                base64,
-                width,
-                height,
-            } => {
-                let mut clipboard = get_system_clipboard()?;
-                self.write_image_to_clipboard(&mut clipboard, base64, *width, *height)?;
+            ClipboardContent::Image { base64, .. } => {
+                self.set_image_robust(base64)?;
             }
         }
 
@@ -820,29 +815,6 @@ impl ClipboardManager {
         self.move_item_to_top(&item.id);
 
         Ok(())
-    }
-
-    fn write_image_to_clipboard(
-        &self,
-        clipboard: &mut Clipboard,
-        base64_str: &str,
-        width: u32,
-        height: u32,
-    ) -> Result<(), String> {
-        let bytes = BASE64
-            .decode(base64_str)
-            .map_err(|e| format!("Base64 decode failed: {}", e))?;
-        let img =
-            image::load_from_memory(&bytes).map_err(|e| format!("Image load failed: {}", e))?;
-        let rgba = img.to_rgba8();
-
-        let image_data = ImageData {
-            width: width as usize,
-            height: height as usize,
-            bytes: rgba.into_raw().into(),
-        };
-
-        clipboard.set_image(image_data).map_err(|e| e.to_string())
     }
 
     fn simulate_paste_action_with_mode(
@@ -933,7 +905,7 @@ impl ClipboardManager {
     }
 
     fn set_clipboard_external(&self, cmd: &str, args: &[&str], data: &str) -> Result<(), String> {
-        self.set_clipboard_external_impl(cmd, args, data, true)
+        self.set_clipboard_external_impl(cmd, args, data.as_bytes(), true)
     }
 
     fn set_clipboard_external_no_kill(
@@ -942,6 +914,25 @@ impl ClipboardManager {
         args: &[&str],
         data: &str,
     ) -> Result<(), String> {
+        self.set_clipboard_external_impl(cmd, args, data.as_bytes(), false)
+    }
+
+    fn set_clipboard_external_bytes(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        data: &[u8],
+    ) -> Result<(), String> {
+        self.set_clipboard_external_impl(cmd, args, data, true)
+    }
+
+    #[allow(dead_code)]
+    fn set_clipboard_external_no_kill_bytes(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        data: &[u8],
+    ) -> Result<(), String> {
         self.set_clipboard_external_impl(cmd, args, data, false)
     }
 
@@ -949,7 +940,7 @@ impl ClipboardManager {
         &self,
         cmd: &str,
         args: &[&str],
-        data: &str,
+        data: &[u8],
         kill_previous: bool,
     ) -> Result<(), String> {
         use std::io::{Read, Write};
@@ -969,7 +960,7 @@ impl ClipboardManager {
 
         if let Some(mut stdin) = child.stdin.take() {
             stdin
-                .write_all(data.as_bytes())
+                .write_all(data)
                 .map_err(|e| format!("Pipe write error: {}", e))?;
         }
 
@@ -1009,6 +1000,52 @@ impl ClipboardManager {
             }
             Err(e) => Err(format!("Process status check failed: {}", e)),
         }
+    }
+
+    /// Robustly set image to clipboard using xclip/wl-copy on Linux if available,
+    /// falling back to arboard. Fixes X11 clipboard ownership loss (issue #259).
+    fn set_image_robust(&self, base64_str: &str) -> Result<(), String> {
+        let bytes = BASE64
+            .decode(base64_str)
+            .map_err(|e| format!("Base64 decode failed: {}", e))?;
+
+        #[cfg(target_os = "linux")]
+        {
+            if crate::session::is_wayland() {
+                if let Ok(()) = self.set_clipboard_external_bytes(
+                    "wl-copy",
+                    &["--type", "image/png"],
+                    &bytes,
+                ) {
+                    return Ok(());
+                }
+            } else if let Ok(()) = self.set_clipboard_external_bytes(
+                "xclip",
+                &[
+                    "-selection",
+                    "clipboard",
+                    "-t",
+                    "image/png",
+                    "-loops",
+                    "0",
+                ],
+                &bytes,
+            ) {
+                return Ok(());
+            }
+        }
+
+        // Fallback to arboard
+        let mut clipboard = get_system_clipboard()?;
+        let img = image::load_from_memory(&bytes)
+            .map_err(|e| format!("Image load failed: {}", e))?;
+        let rgba = img.to_rgba8();
+        let image_data = ImageData {
+            width: rgba.width() as usize,
+            height: rgba.height() as usize,
+            bytes: rgba.into_raw().into(),
+        };
+        clipboard.set_image(image_data).map_err(|e| e.to_string())
     }
 }
 
