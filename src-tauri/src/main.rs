@@ -34,6 +34,14 @@ static STARTED_IN_BACKGROUND: AtomicBool = AtomicBool::new(false);
 /// After the first user toggle, this is set to true to allow normal show/hide behavior
 static INITIAL_SHOW_ALLOWED: AtomicBool = AtomicBool::new(false);
 
+/// Returns true while the app is in background-startup mode — started with
+/// --background and no user-initiated toggle has occurred yet.
+/// During this window both Focused(true) and Focused(false) handlers must
+/// avoid interacting with the window to prevent a Mutter blink loop.
+fn is_background_startup() -> bool {
+    STARTED_IN_BACKGROUND.load(Ordering::Relaxed) && !INITIAL_SHOW_ALLOWED.load(Ordering::Relaxed)
+}
+
 /// Application state shared across all handlers
 pub struct AppState {
     clipboard_manager: Arc<Mutex<ClipboardManager>>,
@@ -323,8 +331,8 @@ impl WindowController {
     pub fn toggle_with_tab(app: &AppHandle, tab: Option<&str>) {
         // User-initiated toggle - mark that we're now allowing shows
         // This stops the background enforcer from hiding the window
-        if STARTED_IN_BACKGROUND.load(Ordering::SeqCst) {
-            INITIAL_SHOW_ALLOWED.store(true, Ordering::SeqCst);
+        if STARTED_IN_BACKGROUND.load(Ordering::Relaxed) {
+            INITIAL_SHOW_ALLOWED.store(true, Ordering::Relaxed);
         }
 
         if let Some(window) = app.get_webview_window("main") {
@@ -725,7 +733,7 @@ fn main() {
     let start_in_background = args.iter().any(|arg| arg == "--background");
     if start_in_background {
         println!("[Startup] Starting in background mode (system tray only)");
-        STARTED_IN_BACKGROUND.store(true, Ordering::SeqCst);
+        STARTED_IN_BACKGROUND.store(true, Ordering::Relaxed);
     }
 
     // Check if --settings flag is present (for first instance startup)
@@ -896,14 +904,7 @@ fn main() {
                 // Block any window show attempts when started in background mode
                 // This catches cases where GTK/Tauri automatically shows the window
                 WindowEvent::Focused(true) => {
-                    // Load both flags atomically with SeqCst to avoid race conditions
-                    let started_in_background = STARTED_IN_BACKGROUND.load(Ordering::SeqCst);
-                    let initial_show_allowed = INITIAL_SHOW_ALLOWED.load(Ordering::SeqCst);
-
-                    // If started in background and initial show hasn't been allowed yet,
-                    // immediately hide the window.  skipTaskbar is permanently true
-                    // (set in config, never cleared), so the WM won't re-focus it.
-                    if started_in_background && !initial_show_allowed {
+                    if is_background_startup() {
                         println!("[WindowController] Background mode: intercepted focus, hiding window");
                         let _ = w_clone.hide();
                     }
@@ -914,9 +915,7 @@ fn main() {
                     // triggers Mutter's stack-position management on an unmapped
                     // window, causing meta_window_set_stack_position_no_sync
                     // assertion failures and a focus→hide→refocus blink loop.
-                    let started_in_background = STARTED_IN_BACKGROUND.load(Ordering::SeqCst);
-                    let initial_show_allowed = INITIAL_SHOW_ALLOWED.load(Ordering::SeqCst);
-                    if started_in_background && !initial_show_allowed {
+                    if is_background_startup() {
                         return;
                     }
 
@@ -992,7 +991,7 @@ fn main() {
                             std::thread::sleep(std::time::Duration::from_millis(200));
 
                             // User has already triggered a toggle, stop blocking
-                            if INITIAL_SHOW_ALLOWED.load(Ordering::SeqCst) {
+                            if INITIAL_SHOW_ALLOWED.load(Ordering::Relaxed) {
                                 break;
                             }
 
