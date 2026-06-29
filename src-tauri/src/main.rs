@@ -909,6 +909,17 @@ fn main() {
                     }
                 }
                 WindowEvent::Focused(false) => {
+                    // During background startup, ignore focus-loss events entirely.
+                    // The window isn't meant to be visible, and hiding it here
+                    // triggers Mutter's stack-position management on an unmapped
+                    // window, causing meta_window_set_stack_position_no_sync
+                    // assertion failures and a focus→hide→refocus blink loop.
+                    let started_in_background = STARTED_IN_BACKGROUND.load(Ordering::SeqCst);
+                    let initial_show_allowed = INITIAL_SHOW_ALLOWED.load(Ordering::SeqCst);
+                    if started_in_background && !initial_show_allowed {
+                        return;
+                    }
+
                     let state = w_clone.state::<AppState>();
                     if state.is_mouse_inside.load(Ordering::Relaxed) {
                         return;
