@@ -83,5 +83,15 @@ export function useHistoryKeyboardNavigation(params: {
 
     globalThis.addEventListener('keydown', handleArrowKeys)
     return () => globalThis.removeEventListener('keydown', handleArrowKeys)
-  }, [activeTab, itemsLength, focusedIndex, setFocusedIndex, historyItemRefs, tabBarRef, onUpFromFirstItem, onLeftArrow, searchInputRef])
+  }, [
+    activeTab,
+    itemsLength,
+    focusedIndex,
+    setFocusedIndex,
+    historyItemRefs,
+    tabBarRef,
+    onUpFromFirstItem,
+    onLeftArrow,
+    searchInputRef,
+  ])
 }

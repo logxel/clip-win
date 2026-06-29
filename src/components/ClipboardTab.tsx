@@ -371,95 +371,96 @@ export function ClipboardTab(props: {
                   'hover:dark:text-win11-text-secondary hover:text-win11Light-text-secondary',
                   'rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-win11-bg-accent'
                 )}
-              aria-expanded={pinnedExpanded}
-            >
-              <Pin size={12} />
-              <span>Pinned</span>
-              <span className="ml-auto opacity-60">{pinnedItems.length}</span>
-              <ChevronDown
-                size={12}
-                className={clsx(
-                  'transition-transform duration-150',
-                  !pinnedExpanded && '-rotate-90'
-                )}
-              />
-            </button>
-            {pinnedExpanded && pinnedItems.map((item, offset) => (
+                aria-expanded={pinnedExpanded}
+              >
+                <Pin size={12} />
+                <span>Pinned</span>
+                <span className="ml-auto opacity-60">{pinnedItems.length}</span>
+                <ChevronDown
+                  size={12}
+                  className={clsx(
+                    'transition-transform duration-150',
+                    !pinnedExpanded && '-rotate-90'
+                  )}
+                />
+              </button>
+              {pinnedExpanded &&
+                pinnedItems.map((item, offset) => (
+                  <HistoryItem
+                    key={item.id}
+                    ref={(el) => {
+                      historyItemRefs.current[offset] = el
+                    }}
+                    item={item}
+                    index={offset}
+                    isFocused={offset === focusedIndex}
+                    onPaste={onPaste}
+                    onPasteTextMode={onPasteTextMode}
+                    onDelete={deleteItem}
+                    onTogglePin={togglePin}
+                    onFocus={() => setFocusedIndex(offset)}
+                    isDark={isDark}
+                    secondaryOpacity={secondaryOpacity}
+                    isCompact={isCompact}
+                    enableSmartActions={settings.enable_smart_actions}
+                    enableUiPolish={settings.enable_ui_polish}
+                  />
+                ))}
+              {unpinnedItems.length > 0 && (
+                <div className="flex items-center gap-1.5 px-1 py-1 text-xs dark:text-win11-text-tertiary text-win11Light-text-tertiary">
+                  <History size={12} />
+                  <span>Recent</span>
+                  <span className="ml-auto opacity-60">{unpinnedItems.length}</span>
+                </div>
+              )}
+              {unpinnedItems.map((item, offset) => {
+                const idx = pinnedItems.length + offset
+                return (
+                  <HistoryItem
+                    key={item.id}
+                    ref={(el) => {
+                      historyItemRefs.current[idx] = el
+                    }}
+                    item={item}
+                    index={idx}
+                    isFocused={idx === focusedIndex}
+                    onPaste={onPaste}
+                    onPasteTextMode={onPasteTextMode}
+                    onDelete={deleteItem}
+                    onTogglePin={togglePin}
+                    onFocus={() => setFocusedIndex(idx)}
+                    isDark={isDark}
+                    secondaryOpacity={secondaryOpacity}
+                    isCompact={isCompact}
+                    enableSmartActions={settings.enable_smart_actions}
+                    enableUiPolish={settings.enable_ui_polish}
+                  />
+                )
+              })}
+            </>
+          ) : (
+            filteredHistory.map((item, idx) => (
               <HistoryItem
                 key={item.id}
                 ref={(el) => {
-                  historyItemRefs.current[offset] = el
+                  historyItemRefs.current[idx] = el
                 }}
                 item={item}
-                index={offset}
-                isFocused={offset === focusedIndex}
+                index={idx}
+                isFocused={idx === focusedIndex}
                 onPaste={onPaste}
                 onPasteTextMode={onPasteTextMode}
                 onDelete={deleteItem}
                 onTogglePin={togglePin}
-                onFocus={() => setFocusedIndex(offset)}
+                onFocus={() => setFocusedIndex(idx)}
                 isDark={isDark}
                 secondaryOpacity={secondaryOpacity}
                 isCompact={isCompact}
                 enableSmartActions={settings.enable_smart_actions}
                 enableUiPolish={settings.enable_ui_polish}
               />
-            ))}
-            {unpinnedItems.length > 0 && (
-              <div className="flex items-center gap-1.5 px-1 py-1 text-xs dark:text-win11-text-tertiary text-win11Light-text-tertiary">
-                <History size={12} />
-                <span>Recent</span>
-                <span className="ml-auto opacity-60">{unpinnedItems.length}</span>
-              </div>
-            )}
-            {unpinnedItems.map((item, offset) => {
-              const idx = pinnedItems.length + offset
-              return (
-                <HistoryItem
-                  key={item.id}
-                  ref={(el) => {
-                    historyItemRefs.current[idx] = el
-                  }}
-                  item={item}
-                  index={idx}
-                  isFocused={idx === focusedIndex}
-                  onPaste={onPaste}
-                  onPasteTextMode={onPasteTextMode}
-                  onDelete={deleteItem}
-                  onTogglePin={togglePin}
-                  onFocus={() => setFocusedIndex(idx)}
-                  isDark={isDark}
-                  secondaryOpacity={secondaryOpacity}
-                  isCompact={isCompact}
-                  enableSmartActions={settings.enable_smart_actions}
-                  enableUiPolish={settings.enable_ui_polish}
-                />
-              )
-            })}
-          </>
-        ) : (
-          filteredHistory.map((item, idx) => (
-            <HistoryItem
-              key={item.id}
-              ref={(el) => {
-                historyItemRefs.current[idx] = el
-              }}
-              item={item}
-              index={idx}
-              isFocused={idx === focusedIndex}
-              onPaste={onPaste}
-              onPasteTextMode={onPasteTextMode}
-              onDelete={deleteItem}
-              onTogglePin={togglePin}
-              onFocus={() => setFocusedIndex(idx)}
-              isDark={isDark}
-              secondaryOpacity={secondaryOpacity}
-              isCompact={isCompact}
-              enableSmartActions={settings.enable_smart_actions}
-              enableUiPolish={settings.enable_ui_polish}
-            />
-          ))
-        )}
+            ))
+          )}
         </div>
       )}
     </>
