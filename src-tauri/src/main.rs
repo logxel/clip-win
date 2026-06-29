@@ -318,15 +318,6 @@ impl WindowController {
         Self::toggle_with_tab(app, None);
     }
 
-    /// Hide the window and tell the compositor to skip it in the taskbar.
-    /// Used during background-mode startup to prevent the WM/DE from
-    /// auto-focusing the window, which would trigger a focus→hide→refocus
-    /// loop (taskbar blinking on GNOME).
-    fn suppress_taskbar_and_hide(window: &WebviewWindow) {
-        let _ = window.set_skip_taskbar(true);
-        let _ = window.hide();
-    }
-
     /// Toggle window visibility with optional tab selection
     /// If tab is Some("emoji"), it will emit an event to switch to the emoji tab
     pub fn toggle_with_tab(app: &AppHandle, tab: Option<&str>) {
@@ -384,13 +375,6 @@ impl WindowController {
 
     fn position_and_show(window: &WebviewWindow, app: &AppHandle) {
         let state = app.state::<AppState>();
-
-        // Restore normal taskbar presence.  set_skip_taskbar(true) was set
-        // during background-mode startup to prevent the WM from auto-focusing
-        // and causing a blink loop.  This runs for all show paths
-        // (toggle_with_tab, finish_setup, etc.) so taskbar is always restored
-        // when the window is shown.
-        let _ = window.set_skip_taskbar(false);
 
         if is_wayland() {
             Self::position_for_wayland(window, &state);
@@ -824,15 +808,15 @@ fn main() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
-            // FIRST THING: If started in background mode, immediately hide the main window
-            // This runs before anything else to prevent the window from appearing.
-            // Suppressing the taskbar tells Mutter/GNOME not to manage this window's
-            // taskbar presence or auto-focus it, which would otherwise trigger a
-            // focus→hide→refocus loop that causes the taskbar icon to blink.
+            // FIRST THING: If started in background mode, immediately hide the main window.
+            // The window is created with visible=false and skipTaskbar=true in the config,
+            // so hide() is defense-in-depth.  skipTaskbar=true prevents Mutter from
+            // managing this window's taskbar presence or auto-focusing it, which would
+            // otherwise trigger a focus→hide→refocus loop (taskbar icon blink).
             if start_in_background_clone {
                 if let Some(main_window) = app.get_webview_window("main") {
-                    WindowController::suppress_taskbar_and_hide(&main_window);
-                    println!("[Setup] Background mode: set skip-taskbar + hide");
+                    let _ = main_window.hide();
+                    println!("[Setup] Background mode: hidden main window");
                 }
             }
 
@@ -917,11 +901,11 @@ fn main() {
                     let initial_show_allowed = INITIAL_SHOW_ALLOWED.load(Ordering::SeqCst);
 
                     // If started in background and initial show hasn't been allowed yet,
-                    // immediately hide the window and ensure it stays out of the taskbar
-                    // so the WM doesn't try to re-focus it.
+                    // immediately hide the window.  skipTaskbar is permanently true
+                    // (set in config, never cleared), so the WM won't re-focus it.
                     if started_in_background && !initial_show_allowed {
                         println!("[WindowController] Background mode: intercepted focus, hiding window");
-                        WindowController::suppress_taskbar_and_hide(&w_clone);
+                        let _ = w_clone.hide();
                     }
                 }
                 WindowEvent::Focused(false) => {
@@ -1006,7 +990,7 @@ fn main() {
                             match window_clone.is_visible() {
                                 Ok(true) => {
                                     println!("[Startup] Background enforcer #{}: window was visible, hiding again", i + 1);
-                                    WindowController::suppress_taskbar_and_hide(&window_clone);
+                                    let _ = window_clone.hide();
                                 }
                                 Ok(false) => {} // Window exists but is hidden, nothing to do
                                 Err(_) => break, // Window was destroyed, stop the enforcer

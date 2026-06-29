@@ -28,8 +28,8 @@
         "transparent": true,
         "visible": false,
         "skipTaskbar": true,
-        "alwaysOnTop": true,
-        "focus": true
+        "alwaysOnTop": false,
+        "focus": false
       },
       {
         "title": "Setup - Clipboard History",
