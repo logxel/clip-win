@@ -289,7 +289,7 @@ async fn finish_setup(app: AppHandle) -> Result<(), String> {
     }
 
     // 3. Show main window
-    if let Some(main_window) = ensure_main_window(&app) {
+    if let Some(main_window) = WindowController::ensure_main_window(&app) {
         // Ensure it's ready to be shown
         WindowController::position_and_show(&main_window, &app);
     }
@@ -334,7 +334,7 @@ impl WindowController {
             INITIAL_SHOW_ALLOWED.store(true, Ordering::Relaxed);
         }
 
-        if let Some(window) = ensure_main_window(app) {
+        if let Some(window) = Self::ensure_main_window(app) {
             if window.is_visible().unwrap_or(false) {
                 // If window is visible, emit tab switch event if tab is specified
                 // This allows Super+. to switch to emoji tab even when window is open
@@ -368,8 +368,92 @@ impl WindowController {
         }
     }
 
+    /// Returns the main window if it already exists, without creating it.
+    /// Use this in paths that should be no-ops when the window is absent
+    /// (e.g., hide(), cleanup).
+    fn get_main_window(app: &AppHandle) -> Option<WebviewWindow> {
+        app.get_webview_window("main")
+    }
+
+    /// Returns the main clipboard window, creating it on first use if it doesn't
+    /// exist.  This avoids creating a GDK surface during background startup,
+    /// which would be managed by Mutter and trigger
+    /// `meta_window_set_stack_position_no_sync` assertions (taskbar blink).
+    fn ensure_main_window(app: &AppHandle) -> Option<WebviewWindow> {
+        if let Some(window) = app.get_webview_window("main") {
+            return Some(window);
+        }
+
+        let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            .title("Clipboard History")
+            .inner_size(360.0, 480.0)
+            .min_inner_size(300.0, 300.0)
+            .resizable(true)
+            .decorations(false)
+            .transparent(true)
+            .visible(false)
+            .skip_taskbar(true)
+            .build();
+
+        let window = match window {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[WindowController] Failed to create main window: {e}");
+                return None;
+            }
+        };
+
+        let w_clone = window.clone();
+        let app_handle_for_event = app.clone();
+
+        window.on_window_event(move |event| match event {
+            WindowEvent::Focused(true) => {
+                if is_background_startup() {
+                    println!(
+                        "[WindowController] Background mode: intercepted focus, hiding window"
+                    );
+                    let _ = w_clone.hide();
+                }
+            }
+            WindowEvent::Focused(false) => {
+                // During background startup, ignore focus-loss events entirely.
+                // The window isn't meant to be visible, and hiding it here
+                // triggers Mutter's stack-position management on an unmapped
+                // window, causing meta_window_set_stack_position_no_sync
+                // assertion failures and a focus→hide→refocus blink loop.
+                if is_background_startup() {
+                    return;
+                }
+
+                let state = w_clone.state::<AppState>();
+                if state.is_mouse_inside.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                if let Some(settings_window) = app_handle_for_event.get_webview_window("settings") {
+                    if settings_window.is_visible().unwrap_or(false) {
+                        return;
+                    }
+                }
+
+                if is_wayland() {
+                    state.config_manager.lock().sync_to_disk();
+                }
+
+                let _ = w_clone.hide();
+            }
+            WindowEvent::Moved(pos) => {
+                let state = w_clone.state::<AppState>();
+                handle_window_moved_for_wayland(&w_clone, &state, pos);
+            }
+            _ => {}
+        });
+
+        Some(window)
+    }
+
     pub fn hide(app: &AppHandle) {
-        if let Some(window) = ensure_main_window(app) {
+        if let Some(window) = Self::get_main_window(app) {
             // FLUSH CONFIG TO DISK ON HIDE
             if let Some(state) = app.try_state::<AppState>() {
                 if is_wayland() {
@@ -561,76 +645,6 @@ impl WindowController {
     }
 }
 
-// --- Main Window Factory (lazy creation) ---
-
-/// Returns the main clipboard window, creating it on first use if it doesn't
-/// exist.  This avoids creating a GDK surface during background startup,
-/// which would be managed by Mutter and trigger
-/// `meta_window_set_stack_position_no_sync` assertions (taskbar blink).
-fn ensure_main_window(app: &AppHandle) -> Option<WebviewWindow> {
-    if let Some(window) = app.get_webview_window("main") {
-        return Some(window);
-    }
-
-    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("Clipboard History")
-        .inner_size(360.0, 480.0)
-        .min_inner_size(300.0, 300.0)
-        .resizable(true)
-        .decorations(false)
-        .transparent(true)
-        .visible(false)
-        .skip_taskbar(true)
-        .build()
-        .ok()?;
-
-    let w_clone = window.clone();
-    let app_handle_for_event = app.clone();
-
-    window.on_window_event(move |event| match event {
-        WindowEvent::Focused(true) => {
-            if is_background_startup() {
-                println!("[WindowController] Background mode: intercepted focus, hiding window");
-                let _ = w_clone.hide();
-            }
-        }
-        WindowEvent::Focused(false) => {
-            // During background startup, ignore focus-loss events entirely.
-            // The window isn't meant to be visible, and hiding it here
-            // triggers Mutter's stack-position management on an unmapped
-            // window, causing meta_window_set_stack_position_no_sync
-            // assertion failures and a focus→hide→refocus blink loop.
-            if is_background_startup() {
-                return;
-            }
-
-            let state = w_clone.state::<AppState>();
-            if state.is_mouse_inside.load(Ordering::Relaxed) {
-                return;
-            }
-
-            if let Some(settings_window) = app_handle_for_event.get_webview_window("settings") {
-                if settings_window.is_visible().unwrap_or(false) {
-                    return;
-                }
-            }
-
-            if is_wayland() {
-                state.config_manager.lock().sync_to_disk();
-            }
-
-            let _ = w_clone.hide();
-        }
-        WindowEvent::Moved(pos) => {
-            let state = w_clone.state::<AppState>();
-            handle_window_moved_for_wayland(&w_clone, &state, pos);
-        }
-        _ => {}
-    });
-
-    Some(window)
-}
-
 // --- Settings Window Controller ---
 
 struct SettingsController;
@@ -638,8 +652,6 @@ struct SettingsController;
 impl SettingsController {
     /// Shows the settings window, recreating it if somehow destroyed
     pub fn show(app: &AppHandle) {
-        use tauri::{WebviewUrl, WebviewWindowBuilder};
-
         match app.get_webview_window("settings") {
             Some(window) => {
                 let _ = window.show();
@@ -891,7 +903,7 @@ fn main() {
             // startup (which triggers meta_window_set_stack_position_no_sync
             // assertions and a taskbar-icon blink).
             if !start_in_background_clone {
-                if ensure_main_window(&app_handle).is_none() {
+                if WindowController::ensure_main_window(&app_handle).is_none() {
                     eprintln!("[Setup] FATAL: Failed to create main window");
                 }
             } else {
