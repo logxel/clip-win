@@ -24,6 +24,10 @@ const GIF_CACHE_MARKER: &str = "clip-win/gifs/";
 const FILE_URI_PREFIX: &str = "file://";
 const WL_COPY_SETTLE_TIME: u64 = 150;
 
+// arboard retry & log-rate-limit intervals (tunable without touching logic).
+const ARBOARD_RETRY_INTERVAL: Duration = Duration::from_secs(120);
+const LOG_INTERVAL: Duration = Duration::from_secs(30);
+
 // --- Helper Functions ---
 
 // Simple FNV-1a implementation for stable hashing across restarts
@@ -210,8 +214,8 @@ pub struct ClipboardManager {
     /// Maximum number of history items to keep
     max_history_size: usize,
     clipboard_server: Mutex<Option<Child>>,
-    /// When the last complete read failure occurred (for log rate-limiting).
-    last_read_failure: Option<Instant>,
+    /// When we last printed an error message (for log rate-limiting).
+    last_error_log: Option<Instant>,
     /// When we last retried arboard initialisation (for transient failures).
     last_clipboard_retry: Option<Instant>,
     /// Long-lived arboard Clipboard connection (per arboard docs).
@@ -267,7 +271,7 @@ impl ClipboardManager {
             persistence_path,
             max_history_size: max_size,
             clipboard_server: Mutex::new(None),
-            last_read_failure: None,
+            last_error_log: None,
             last_clipboard_retry: None,
             clipboard: init_clipboard(),
         };
@@ -381,7 +385,7 @@ impl ClipboardManager {
         if let Some(ref mut clipboard) = self.clipboard {
             match clipboard.get_text() {
                 Ok(text) => {
-                    self.last_read_failure = None;
+                    self.last_error_log = None;
                     return Ok(text);
                 }
                 Err(e) => {
@@ -396,7 +400,7 @@ impl ClipboardManager {
                 // Always try wl-paste — transient failures should not
                 // suppress subsequent attempts.
                 if let Some(text) = self.get_text_via_wl_paste() {
-                    self.last_read_failure = None;
+                    self.last_error_log = None;
                     return Ok(text);
                 }
 
@@ -404,10 +408,6 @@ impl ClipboardManager {
                     "wl-paste could not read clipboard (clipboard may be empty)",
                 );
             }
-        }
-
-        if self.last_read_failure.is_none() {
-            self.last_read_failure = Some(Instant::now());
         }
 
         Err(arboard::Error::ContentNotAvailable)
@@ -418,13 +418,12 @@ impl ClipboardManager {
     /// Only logs on state change (unavailable → available), not on repeated
     /// failures — the fallback (wl-copy/wl-paste) works fine in the meantime.
     fn retry_clipboard_init(&mut self) {
-        const RETRY_INTERVAL: Duration = Duration::from_secs(120);
         if self.clipboard.is_some() {
             return;
         }
         if self
             .last_clipboard_retry
-            .is_some_and(|t| t.elapsed() < RETRY_INTERVAL)
+            .is_some_and(|t| t.elapsed() < ARBOARD_RETRY_INTERVAL)
         {
             return;
         }
@@ -436,14 +435,15 @@ impl ClipboardManager {
         }
     }
 
-    /// Print an error message at most once per 30s window to avoid log spam
-    /// from the polling watcher when clipboard reads consistently fail.
-    fn log_error_rate_limited(&self, msg: &str) {
-        const LOG_INTERVAL: Duration = Duration::from_secs(30);
+    /// Print an error message at most once per `LOG_INTERVAL` to avoid
+    /// log spam from the polling watcher when clipboard reads fail.
+    fn log_error_rate_limited(&mut self, msg: &str) {
+        let now = Instant::now();
         let should_log = self
-            .last_read_failure
-            .map_or(true, |t| t.elapsed() >= LOG_INTERVAL);
+            .last_error_log
+            .map_or(true, |t| now - t >= LOG_INTERVAL);
         if should_log {
+            self.last_error_log = Some(now);
             eprintln!("[ClipboardManager] {}", msg);
         }
     }
@@ -530,7 +530,11 @@ impl ClipboardManager {
     }
 
     /// Try to get HTML content from clipboard. Returns None if not available.
+    ///
+    /// Calls `retry_clipboard_init` so HTML reads benefit from the same
+    /// periodic arboard retry logic as `get_current_text`.
     pub fn get_current_html(&mut self) -> Option<String> {
+        self.retry_clipboard_init();
         self.clipboard.as_mut()?.get().html().ok()
     }
 
@@ -953,7 +957,7 @@ impl ClipboardManager {
         if let Some(ref mut clipboard) = self.clipboard {
             clipboard.set_text(text).map_err(|e| e.to_string())
         } else {
-            Err("Clipboard not available".to_string())
+            Err("Clipboard not available (no arboard connection; external tools may have also failed)".to_string())
         }
     }
 
@@ -993,7 +997,7 @@ impl ClipboardManager {
                 .set_html(html, Some(plain))
                 .map_err(|e| e.to_string())
         } else {
-            Err("Clipboard not available".to_string())
+            Err("Clipboard not available (no arboard connection; external tools may have also failed)".to_string())
         }
     }
 
@@ -1131,7 +1135,7 @@ impl ClipboardManager {
             };
             clipboard.set_image(image_data).map_err(|e| e.to_string())
         } else {
-            Err("Clipboard not available".to_string())
+            Err("Clipboard not available (no arboard connection; external tools may have also failed)".to_string())
         }
     }
 }
