@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, State, WebviewUrl,
@@ -962,28 +963,95 @@ fn main() {
 
             let (icon, use_template_icon) = theme_manager::initial_tray_icon(&settings);
 
-            let _tray = TrayIconBuilder::with_id("main-tray")
-                .icon(icon)
-                .icon_as_template(use_template_icon)
-                .tooltip("Clipboard History")
-                .temp_dir_path(temp_dir)
-                .menu(&menu)
-                .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "quit" => app.exit(0),
-                    "show" => WindowController::toggle(app),
-                    "settings" => SettingsController::show(app),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        ..
-                    } = event
-                    {
-                        WindowController::toggle(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+            // In background mode, defer tray icon creation to avoid a GDK
+            // surface during compositor startup.  libappindicator (used by
+            // TrayIconBuilder on Linux) registers a StatusNotifierItem that
+            // the GNOME Shell AppIndicator extension renders as a small tray
+            // widget.  If this widget is created before Mutter has fully
+            // initialised its window-stacking state, Mutter hits:
+            //   meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed
+            // and the taskbar icon enters a blink loop.
+            //
+            // Deferring tray creation by 3 s lets Mutter finish its startup
+            // stacking bookkeeping uninterrupted.  GTK operations (MenuItem,
+            // Menu, TrayIconBuilder) must run on the main thread, so we
+            // dispatch them via AppHandle::run_on_main_thread.
+            if start_in_background_clone {
+                println!("[Setup] Background mode: deferring tray icon creation by 3 s");
+                let handle_for_tray = app_handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(3));
+                    let handle = handle_for_tray.clone();
+                    let _ = handle_for_tray.run_on_main_thread(move || {
+                        let show = MenuItem::with_id(
+                            &handle,
+                            "show",
+                            "Show Clipboard",
+                            true,
+                            None::<&str>,
+                        )
+                        .expect("Failed to create Show menu item");
+                        let settings =
+                            MenuItem::with_id(&handle, "settings", "Settings", true, None::<&str>)
+                                .expect("Failed to create Settings menu item");
+                        let quit = MenuItem::with_id(&handle, "quit", "Quit", true, None::<&str>)
+                            .expect("Failed to create Quit menu item");
+                        let menu = Menu::with_items(&handle, &[&show, &settings, &quit])
+                            .expect("Failed to build tray menu");
+                        let temp_dir = std::env::temp_dir().join("clip-win");
+                        std::fs::create_dir_all(&temp_dir).ok();
+                        let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
+                            .expect("Failed to load tray icon");
+                        let _tray = TrayIconBuilder::with_id("main-tray")
+                            .icon(icon)
+                            .icon_as_template(false)
+                            .tooltip("Clipboard History")
+                            .temp_dir_path(temp_dir)
+                            .menu(&menu)
+                            .on_menu_event(move |app, event| match event.id.as_ref() {
+                                "quit" => app.exit(0),
+                                "show" => WindowController::toggle(app),
+                                "settings" => SettingsController::show(app),
+                                _ => {}
+                            })
+                            .on_tray_icon_event(|tray, event| {
+                                if let TrayIconEvent::Click {
+                                    button: MouseButton::Left,
+                                    ..
+                                } = event
+                                {
+                                    WindowController::toggle(tray.app_handle());
+                                }
+                            })
+                            .build(&handle)
+                            .expect("Failed to create tray icon (deferred)");
+                        println!("[Tray] Deferred tray icon created");
+                    });
+                });
+            } else {
+                let _tray = TrayIconBuilder::with_id("main-tray")
+                    .icon(icon)
+                    .icon_as_template(use_template_icon)
+                    .tooltip("Clipboard History")
+                    .temp_dir_path(temp_dir)
+                    .menu(&menu)
+                    .on_menu_event(move |app, event| match event.id.as_ref() {
+                        "quit" => app.exit(0),
+                        "show" => WindowController::toggle(app),
+                        "settings" => SettingsController::show(app),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            ..
+                        } = event
+                        {
+                            WindowController::toggle(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
+            }
 
             // Update icon asynchronously if dynamic is enabled (to fix the initial default icon)
             if settings.enable_dynamic_tray_icon {
