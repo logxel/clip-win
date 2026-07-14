@@ -37,3 +37,11 @@ src-tauri/Cargo.lock
 src-tauri/gen/
 
 temp/*
+
+
+# APM dependencies
+apm_modules/
+apm.yml
+apm.lock.yaml
+docs/plan
+.opencode/
