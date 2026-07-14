@@ -33,8 +33,9 @@ function ClipboardAppWithSetup() {
         if (isFirst) {
           setWaitingForSetup(true)
 
-          // In Tauri v2, if the window is in tauri.conf.json, it's already created.
-          // We just need to find it and show it.
+          // Setup window is created on demand — no longer defined in
+          // tauri.conf.json to prevent Mutter managing hidden GDK surfaces
+          // at startup (meta_window_set_stack_position_no_sync assertion).
           const windows = await getAllWindows()
           const setupWin = windows.find((w) => w.label === 'setup')
 
@@ -42,11 +43,18 @@ function ClipboardAppWithSetup() {
             await setupWin.show()
             await setupWin.setFocus()
           } else {
-            console.error('Setup window not found in config')
-            // Attempt to create it if it somehow doesn't exist (fallback)
-            const newSetupWin = new WebviewWindow('setup')
+            // Create setup window with proper dimensions for the wizard
+            const newSetupWin = new WebviewWindow('setup', {
+              title: 'Setup - Clipboard History',
+              width: 550,
+              height: 650,
+              resizable: true,
+              minWidth: 400,
+              minHeight: 500,
+              decorations: true,
+              center: true,
+            })
             newSetupWin.once('tauri://created', () => {
-              newSetupWin.show()
               newSetupWin.setFocus()
             })
           }

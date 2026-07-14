@@ -679,7 +679,7 @@ impl WindowController {
 struct SettingsController;
 
 impl SettingsController {
-    /// Shows the settings window, recreating it if somehow destroyed
+    /// Shows the settings window, creating it on first use if it doesn't exist.
     pub fn show(app: &AppHandle) {
         match app.get_webview_window("settings") {
             Some(window) => {
@@ -688,10 +688,7 @@ impl SettingsController {
                 let _ = window.set_focus();
             }
             None => {
-                // Fallback: recreate the window if it was somehow destroyed
-                eprintln!(
-                    "[SettingsController] Settings window missing, recreating as fallback..."
-                );
+                println!("[SettingsController] Creating settings window");
 
                 match WebviewWindowBuilder::new(
                     app,
@@ -997,12 +994,12 @@ fn main() {
                 });
             }
 
-            // Verify that settings window was created from config
-            if app.get_webview_window("settings").is_none() {
-                eprintln!("[Setup] FATAL: Settings window missing from config");
-            } else {
-                println!("[Setup] Settings window created successfully from config");
-            }
+            // Setup and settings windows are no longer defined in tauri.conf.json
+            // to prevent Mutter from managing hidden GDK surfaces at startup
+            // (which triggers meta_window_set_stack_position_no_sync assertions).
+            // They are created on demand:
+            //   - Settings: by SettingsController::show()
+            //   - Setup: by the frontend if first run, or on demand
 
             // Window event handlers are set up by ensure_main_window() when
             // the main window is created (either here or lazily on first toggle).

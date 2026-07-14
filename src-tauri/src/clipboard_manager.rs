@@ -516,14 +516,16 @@ impl ClipboardManager {
             if !text.is_empty() {
                 return Some(text);
             }
-            eprintln!("[ClipboardManager] wl-paste returned empty output");
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!(
-                "[ClipboardManager] wl-paste exited with {}: {}",
-                output.status,
-                stderr.trim()
-            );
+            let code = output.status.code().unwrap_or(-1);
+            if code != 1 {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!(
+                    "[ClipboardManager] wl-paste exited with {}: {}",
+                    output.status,
+                    stderr.trim()
+                );
+            }
         }
 
         None
