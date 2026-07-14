@@ -251,6 +251,8 @@ impl Drop for ClipboardManager {
     }
 }
 
+/// Set to true when arboard fails on Wayland (e.g. cosmic-comp in
+/// unprivileged mode without wlr-data-control).  Once cached, subsequent
 impl ClipboardManager {
     fn clamp_max_history_size(size: usize) -> usize {
         match size {
@@ -1050,6 +1052,9 @@ impl ClipboardManager {
             self.kill_and_reap_child();
         }
 
+        // Snapshot the current selection owner so we can detect the handoff.
+        let owner_before = crate::paste_sync::clipboard_owner();
+
         let mut child = Command::new(cmd)
             .args(args)
             .stdin(Stdio::piped())
@@ -1064,7 +1069,13 @@ impl ClipboardManager {
                 .map_err(|e| format!("Pipe write error: {}", e))?;
         }
 
-        thread::sleep(Duration::from_millis(WL_COPY_SETTLE_TIME));
+        // Wait for the helper to actually acquire the selection, polling the
+        // real X11 CLIPBOARD owner instead of sleeping a fixed delay.
+        // Sleeps the same fixed delay as before when unverifiable (Wayland).
+        crate::paste_sync::settle_clipboard_handoff(
+            owner_before,
+            Duration::from_millis(WL_COPY_SETTLE_TIME),
+        );
 
         match child.try_wait() {
             Ok(Some(status)) if !status.success() => {

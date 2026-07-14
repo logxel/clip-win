@@ -11,16 +11,16 @@ pub enum PasteKeyMode {
 }
 
 /// Delay before starting the paste sequence to ensure window focus is stable
-const PRE_PASTE_DELAY_MS: u64 = 50;
+const PRE_PASTE_DELAY_MS: u64 = 1;
 
 /// Delay between key events to ensure proper registration
 const KEY_EVENT_DELAY_MS: u64 = 50;
 
 /// Delay after device creation for uinput to be recognized
-const UINPUT_DEVICE_SETTLE_MS: u64 = 100;
+const UINPUT_DEVICE_SETTLE_MS: u64 = 50;
 
 /// Delay after paste sequence completes
-const POST_PASTE_DELAY_MS: u64 = 30;
+const POST_PASTE_DELAY_MS: u64 = 1;
 
 pub fn simulate_paste_keystroke() -> Result<(), String> {
     simulate_paste_keystroke_with_mode(PasteKeyMode::CtrlV)
@@ -186,8 +186,7 @@ fn simulate_paste_xdotool_with_mode(mode: PasteKeyMode) -> Result<(), String> {
     };
 
     let output = std::process::Command::new("xdotool")
-        .args(["key", "--delay"])
-        .arg(KEY_EVENT_DELAY_MS.to_string())
+        .arg("key")
         .arg("--clearmodifiers")
         .arg(key_combo)
         .output()
