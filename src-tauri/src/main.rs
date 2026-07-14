@@ -298,7 +298,10 @@ async fn finish_setup(app: AppHandle) -> Result<(), String> {
         let _ = setup_window.close();
     }
 
-    // 3. Show main window
+    // 3. Allow window to be shown (user explicitly chose "Start Using")
+    INITIAL_SHOW_ALLOWED.store(true, Ordering::Relaxed);
+
+    // 4. Show main window
     if let Some(main_window) = WindowController::ensure_main_window(&app) {
         // Ensure it's ready to be shown
         WindowController::position_and_show(&main_window, &app);
@@ -319,10 +322,21 @@ impl PasteHelper {
     /// Restores focus to the previous window and waits for it to settle.
     /// This ensures keystrokes are sent to the correct application.
     async fn prepare_target_window() -> Result<(), String> {
-        if let Err(e) = restore_focused_window() {
-            eprintln!("[PasteHelper] Warning: Focus restoration failed: {}", e);
+        match restore_focused_window() {
+            Ok(true) => {
+                // Focus was *verified* on the target window by the poller;
+                // no extra settle time is needed.
+            }
+            Ok(false) => {
+                // Focus restore was requested but could not be verified —
+                // keep the original conservative settle delay.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(e) => {
+                eprintln!("[PasteHelper] Warning: Focus restoration failed: {}", e);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
         Ok(())
     }
 }
@@ -482,6 +496,11 @@ impl WindowController {
         } else {
             Self::position_for_non_wayland(window);
         }
+
+        // The window is born with skip_taskbar(true) to prevent Mutter
+        // taskbar blink during background startup. Restore normal taskbar
+        // presence now that the user has explicitly requested visibility.
+        let _ = window.set_skip_taskbar(false);
 
         let is_wayland_session = is_wayland();
 
@@ -664,6 +683,7 @@ impl SettingsController {
     pub fn show(app: &AppHandle) {
         match app.get_webview_window("settings") {
             Some(window) => {
+                let _ = window.set_skip_taskbar(false);
                 let _ = window.show();
                 let _ = window.set_focus();
             }

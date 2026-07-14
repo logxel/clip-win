@@ -32,14 +32,14 @@ export function useHistoryKeyboardNavigation(params: {
     const handleArrowKeys = (e: KeyboardEvent) => {
       const activeElement = document.activeElement
       if (activeElement?.getAttribute('role') === 'tab') return
-      if (activeElement?.tagName === 'INPUT' && activeElement !== searchInputRef.current) return
 
-      // Check if focus is on a history item, body, or search input
       const isOnHistoryItem =
         historyItemRefs.current.some((ref) => ref === activeElement) ||
         activeElement === document.body
       const isOnSearchInput = activeElement === searchInputRef.current
+      if (activeElement?.tagName === 'INPUT' && !isOnSearchInput) return
       if (!isOnHistoryItem && !isOnSearchInput) return
+      if (isOnSearchInput && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
 
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -50,8 +50,8 @@ export function useHistoryKeyboardNavigation(params: {
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
         if (isOnSearchInput) return
-        if (focusedIndex === 0 && onUpFromFirstItem?.()) return
         if (focusedIndex === 0) {
+          if (onUpFromFirstItem?.()) return
           searchInputRef.current?.focus()
           return
         }
@@ -60,7 +60,7 @@ export function useHistoryKeyboardNavigation(params: {
         historyItemRefs.current[newIndex]?.focus()
         historyItemRefs.current[newIndex]?.scrollIntoView({ block: 'nearest' })
       } else if (e.key === 'ArrowLeft') {
-        if (onLeftArrow) {
+        if (onLeftArrow && !isOnSearchInput) {
           e.preventDefault()
           onLeftArrow()
         }
