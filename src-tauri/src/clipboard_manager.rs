@@ -72,10 +72,25 @@ pub fn calculate_hash<T: Hash>(t: &T) -> u64 {
 /// "Wayland support relies on the wlr-data-control protocol extension(s),
 /// which are not supported by all Wayland compositors."
 ///
-/// When initialisation fails on Wayland we skip arboard for the entire
-/// session and fall back to wl-copy/wl-paste, avoiding repeated connection
-/// attempts every poll cycle.
+/// **On Wayland we always skip arboard for clipboard reading.**
+/// arboard's Wayland backend (via wl-clipboard-rs) creates a new Wayland
+/// socket connection on every `get_text()` call.  With 500 ms polling this
+/// causes Mutter to track each transient client, attempt to stack it, and
+/// hit `meta_window_set_stack_position_no_sync` assertions — manifesting
+/// as a taskbar-icon blink every poll cycle.
+/// We fall back to wl-paste (a single long-lived process) for reading.
+/// arboard remains available for writing (set_text / set_image) via
+/// `get_arboard_for_writing()`.
+#[cfg(target_os = "linux")]
 fn init_clipboard() -> Option<Clipboard> {
+    if crate::session::is_wayland() {
+        println!(
+            "[ClipboardManager] Wayland detected — skipping arboard for reading.\n\
+             Clipboard reads will use wl-paste to avoid Wayland connection churn\n\
+             that triggers Mutter stack-position assertions (taskbar blink)."
+        );
+        return None;
+    }
     match Clipboard::new() {
         Ok(cb) => {
             println!("[ClipboardManager] Initialised long-lived clipboard connection");
@@ -84,9 +99,24 @@ fn init_clipboard() -> Option<Clipboard> {
         Err(e) => {
             eprintln!(
                 "[ClipboardManager] Failed to create arboard clipboard: {}\n\
-                 This is expected on Wayland compositors that do not support\n\
-                 the wlr-data-control protocol. Falling back to external\n\
-                 clipboard tools (wl-copy/wl-paste/xclip).",
+                 Falling back to external clipboard tools (wl-copy/wl-paste/xclip).",
+                e
+            );
+            None
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn init_clipboard() -> Option<Clipboard> {
+    match Clipboard::new() {
+        Ok(cb) => {
+            println!("[ClipboardManager] Initialised long-lived clipboard connection");
+            Some(cb)
+        }
+        Err(e) => {
+            eprintln!(
+                "[ClipboardManager] Failed to create arboard clipboard: {}",
                 e
             );
             None
@@ -415,10 +445,18 @@ impl ClipboardManager {
 
     /// Periodically retry arboard initialisation when it was `None` at
     /// startup (e.g. Wayland compositor without wlr-data-control).
-    /// Only logs on state change (unavailable → available), not on repeated
+    /// Only logs on state change (unavailable -> available), not on repeated
     /// failures — the fallback (wl-copy/wl-paste) works fine in the meantime.
+    ///
+    /// On Wayland this is a no-op: we intentionally skip arboard for reading
+    /// to avoid per-call Wayland connection churn that triggers Mutter
+    /// `meta_window_set_stack_position_no_sync` assertions.
     fn retry_clipboard_init(&mut self) {
         if self.clipboard.is_some() {
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if crate::session::is_wayland() {
             return;
         }
         if self
