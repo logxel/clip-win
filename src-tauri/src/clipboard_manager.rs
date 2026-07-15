@@ -72,10 +72,25 @@ pub fn calculate_hash<T: Hash>(t: &T) -> u64 {
 /// "Wayland support relies on the wlr-data-control protocol extension(s),
 /// which are not supported by all Wayland compositors."
 ///
-/// When initialisation fails on Wayland we skip arboard for the entire
-/// session and fall back to wl-copy/wl-paste, avoiding repeated connection
-/// attempts every poll cycle.
+/// **On Wayland we always skip arboard for clipboard reading.**
+/// arboard's Wayland backend (via wl-clipboard-rs) creates a new Wayland
+/// socket connection on every `get_text()` call.  With 500 ms polling this
+/// causes Mutter to track each transient client, attempt to stack it, and
+/// hit `meta_window_set_stack_position_no_sync` assertions — manifesting
+/// as a taskbar-icon blink every poll cycle.
+/// We fall back to wl-paste (a single long-lived process) for reading.
+/// arboard remains available for writing (set_text / set_image) via
+/// `get_arboard_for_writing()`.
+#[cfg(target_os = "linux")]
 fn init_clipboard() -> Option<Clipboard> {
+    if crate::session::is_wayland() {
+        println!(
+            "[ClipboardManager] Wayland detected — skipping arboard for reading.\n\
+             Clipboard reads will use wl-paste to avoid Wayland connection churn\n\
+             that triggers Mutter stack-position assertions (taskbar blink)."
+        );
+        return None;
+    }
     match Clipboard::new() {
         Ok(cb) => {
             println!("[ClipboardManager] Initialised long-lived clipboard connection");
@@ -84,9 +99,24 @@ fn init_clipboard() -> Option<Clipboard> {
         Err(e) => {
             eprintln!(
                 "[ClipboardManager] Failed to create arboard clipboard: {}\n\
-                 This is expected on Wayland compositors that do not support\n\
-                 the wlr-data-control protocol. Falling back to external\n\
-                 clipboard tools (wl-copy/wl-paste/xclip).",
+                 Falling back to external clipboard tools (wl-copy/wl-paste/xclip).",
+                e
+            );
+            None
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn init_clipboard() -> Option<Clipboard> {
+    match Clipboard::new() {
+        Ok(cb) => {
+            println!("[ClipboardManager] Initialised long-lived clipboard connection");
+            Some(cb)
+        }
+        Err(e) => {
+            eprintln!(
+                "[ClipboardManager] Failed to create arboard clipboard: {}",
                 e
             );
             None
@@ -397,8 +427,14 @@ impl ClipboardManager {
         #[cfg(target_os = "linux")]
         {
             if crate::session::is_wayland() {
-                // Always try wl-paste — transient failures should not
-                // suppress subsequent attempts.
+                // Try GTK3 clipboard first — uses the existing wl_data_device
+                // connection, creates zero new Wayland surfaces or connections.
+                if let Some(text) = self.get_text_via_gtk() {
+                    self.last_error_log = None;
+                    return Ok(text);
+                }
+
+                // Fall back to wl-paste if GTK clipboard unavailable.
                 if let Some(text) = self.get_text_via_wl_paste() {
                     self.last_error_log = None;
                     return Ok(text);
@@ -415,10 +451,18 @@ impl ClipboardManager {
 
     /// Periodically retry arboard initialisation when it was `None` at
     /// startup (e.g. Wayland compositor without wlr-data-control).
-    /// Only logs on state change (unavailable → available), not on repeated
+    /// Only logs on state change (unavailable -> available), not on repeated
     /// failures — the fallback (wl-copy/wl-paste) works fine in the meantime.
+    ///
+    /// On Wayland this is a no-op: we intentionally skip arboard for reading
+    /// to avoid per-call Wayland connection churn that triggers Mutter
+    /// `meta_window_set_stack_position_no_sync` assertions.
     fn retry_clipboard_init(&mut self) {
         if self.clipboard.is_some() {
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if crate::session::is_wayland() {
             return;
         }
         if self
@@ -445,6 +489,61 @@ impl ClipboardManager {
         if should_log {
             self.last_error_log = Some(now);
             eprintln!("[ClipboardManager] {}", msg);
+        }
+    }
+
+    /// Read clipboard text via GTK3's native clipboard API.
+    ///
+    /// On Wayland this is the preferred path: GTK already holds a
+    /// `wl_data_device` connection (from Tauri/WebKitGTK init), so
+    /// `gtk_clipboard_wait_for_text()` reads through that existing
+    /// connection without creating new Wayland surfaces or client
+    /// connections — unlike `wl-paste` which spawns transient
+    /// `wl_surface` objects that trigger Mutter assertions.
+    ///
+    /// Uses raw FFI to bypass gtk-rs's `assert_initialized_main_thread!()`
+    /// guard — this function is called from the clipboard watcher thread,
+    /// not the main thread. The raw `gtk_clipboard_wait_for_text()` creates
+    /// a nested `GMainContext` iteration internally which processes pending
+    /// events, so clipboard IPC works even from a background thread.
+    ///
+    /// Returns `None` if GTK is not initialized, clipboard is empty,
+    /// or the read fails.
+    #[cfg(target_os = "linux")]
+    fn get_text_via_gtk(&self) -> Option<String> {
+        use std::ffi::CStr;
+
+        unsafe {
+            // Check if GTK was already initialized by Tauri/WebKitGTK.
+            // Raw FFI avoids the thread-safety panic in gtk-rs wrappers.
+            // Use gtk_init with null args to check without re-initializing.
+            // gtk_init_check returns TRUE if already initialized.
+            if gtk::ffi::gtk_init_check(std::ptr::null_mut(), std::ptr::null_mut()) == 0 {
+                return None;
+            }
+
+            // GDK_SELECTION_CLIPBOARD is the "CLIPBOARD" atom.
+            let atom = gtk::gdk::ffi::gdk_atom_intern(
+                c"CLIPBOARD".as_ptr(),
+                0, // only_if_exists = FALSE
+            );
+
+            let clipboard = gtk::ffi::gtk_clipboard_get(atom);
+            if clipboard.is_null() {
+                return None;
+            }
+
+            // Blocks until clipboard text is available. Internally runs
+            // g_main_context_iteration() to process pending IPC events.
+            let text_ptr = gtk::ffi::gtk_clipboard_wait_for_text(clipboard);
+            if text_ptr.is_null() {
+                return None;
+            }
+
+            let text = CStr::from_ptr(text_ptr).to_string_lossy().into_owned();
+            gtk::glib::ffi::g_free(text_ptr as *mut _);
+
+            Some(text)
         }
     }
 
@@ -516,14 +615,16 @@ impl ClipboardManager {
             if !text.is_empty() {
                 return Some(text);
             }
-            eprintln!("[ClipboardManager] wl-paste returned empty output");
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!(
-                "[ClipboardManager] wl-paste exited with {}: {}",
-                output.status,
-                stderr.trim()
-            );
+            let code = output.status.code().unwrap_or(-1);
+            if code != 1 {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!(
+                    "[ClipboardManager] wl-paste exited with {}: {}",
+                    output.status,
+                    stderr.trim()
+                );
+            }
         }
 
         None
