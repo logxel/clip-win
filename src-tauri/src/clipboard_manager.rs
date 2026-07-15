@@ -427,8 +427,14 @@ impl ClipboardManager {
         #[cfg(target_os = "linux")]
         {
             if crate::session::is_wayland() {
-                // Always try wl-paste — transient failures should not
-                // suppress subsequent attempts.
+                // Try GTK3 clipboard first — uses the existing wl_data_device
+                // connection, creates zero new Wayland surfaces or connections.
+                if let Some(text) = self.get_text_via_gtk() {
+                    self.last_error_log = None;
+                    return Ok(text);
+                }
+
+                // Fall back to wl-paste if GTK clipboard unavailable.
                 if let Some(text) = self.get_text_via_wl_paste() {
                     self.last_error_log = None;
                     return Ok(text);
@@ -484,6 +490,28 @@ impl ClipboardManager {
             self.last_error_log = Some(now);
             eprintln!("[ClipboardManager] {}", msg);
         }
+    }
+
+    /// Read clipboard text via GTK3's native clipboard API.
+    ///
+    /// On Wayland this is the preferred path: GTK already holds a
+    /// `wl_data_device` connection (from Tauri/WebKitGTK init), so
+    /// `gtk_clipboard_wait_for_text()` reads through that existing
+    /// connection without creating new Wayland surfaces or client
+    /// connections — unlike `wl-paste` which spawns transient
+    /// `wl_surface` objects that trigger Mutter assertions.
+    ///
+    /// Returns `None` if GTK is not initialized, clipboard is empty,
+    /// or the read times out.
+    #[cfg(target_os = "linux")]
+    fn get_text_via_gtk(&self) -> Option<String> {
+        // `init()` is a no-op if GTK was already initialized by
+        // Tauri/WebKitGTK; returns Err only if initialization fails
+        // (headless, missing libs, etc.).
+        gtk::init().ok()?;
+
+        let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+        clipboard.wait_for_text().map(|s| s.to_string())
     }
 
     #[cfg(target_os = "linux")]
