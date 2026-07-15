@@ -15,38 +15,7 @@
       "iconPath": "icons/icon.png",
       "iconAsTemplate": false
     },
-    "windows": [
-      {
-        "title": "Setup - Clipboard History",
-        "label": "setup",
-        "width": 550,
-        "height": 650,
-        "resizable": true,
-        "minWidth": 400,
-        "minHeight": 500,
-        "decorations": true,
-        "transparent": false,
-        "visible": false,
-        "skipTaskbar": true,
-        "alwaysOnTop": false,
-        "center": true,
-        "focus": false
-      },
-      {
-        "title": "Settings - Clipboard History",
-        "label": "settings",
-        "width": 480,
-        "height": 520,
-        "resizable": false,
-        "decorations": true,
-        "transparent": false,
-        "visible": false,
-        "skipTaskbar": true,
-        "alwaysOnTop": false,
-        "center": true,
-        "focus": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

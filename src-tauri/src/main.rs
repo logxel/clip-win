@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, State, WebviewUrl,
@@ -679,7 +680,7 @@ impl WindowController {
 struct SettingsController;
 
 impl SettingsController {
-    /// Shows the settings window, recreating it if somehow destroyed
+    /// Shows the settings window, creating it on first use if it doesn't exist.
     pub fn show(app: &AppHandle) {
         match app.get_webview_window("settings") {
             Some(window) => {
@@ -688,10 +689,7 @@ impl SettingsController {
                 let _ = window.set_focus();
             }
             None => {
-                // Fallback: recreate the window if it was somehow destroyed
-                eprintln!(
-                    "[SettingsController] Settings window missing, recreating as fallback..."
-                );
+                println!("[SettingsController] Creating settings window");
 
                 match WebviewWindowBuilder::new(
                     app,
@@ -768,8 +766,31 @@ fn start_clipboard_watcher(app: AppHandle, clipboard_manager: Arc<Mutex<Clipboar
                 }
             }
 
-            // Text
-            if let Ok(text) = manager.get_current_text() {
+            // Text — try GTK on main thread first (zero surfaces after
+            // wl_data_device activation), fall back to wl-paste.
+            #[cfg(target_os = "linux")]
+            let text_result = {
+                if is_wayland() {
+                    // Dispatch GTK clipboard read to the main thread where
+                    // g_main_context_iteration() can process Wayland events.
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let handle = app.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        let text = ClipboardManager::get_text_via_gtk();
+                        let _ = tx.send(text);
+                    });
+                    match rx.recv_timeout(Duration::from_millis(400)) {
+                        Ok(Some(text)) if !text.is_empty() => Ok(text),
+                        _ => manager.get_current_text(),
+                    }
+                } else {
+                    manager.get_current_text()
+                }
+            };
+            #[cfg(not(target_os = "linux"))]
+            let text_result = manager.get_current_text();
+
+            if let Ok(text) = text_result {
                 if !text.is_empty() {
                     let text_hash = clip_win::clipboard_manager::calculate_hash(&text);
 
@@ -926,17 +947,32 @@ fn main() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
-            // If not started in background mode, create the main window now.
-            // In background mode, the window is created lazily on first user
-            // toggle to avoid Mutter managing a hidden GDK surface during
-            // startup (which triggers meta_window_set_stack_position_no_sync
-            // assertions and a taskbar-icon blink).
-            if !start_in_background_clone {
-                if WindowController::ensure_main_window(&app_handle).is_none() {
-                    eprintln!("[Setup] FATAL: Failed to create main window");
+            // Create the main window and briefly show it to activate the
+            // Wayland wl_data_device. On GNOME/Mutter (which lacks
+            // wlr-data-control), clipboard reads from a background thread
+            // create transient wl_surface objects to gain focus — each one
+            // triggers meta_window_set_stack_position_no_sync and a
+            // taskbar-icon blink. Showing the window once gives the display
+            // connection a focused wl_data_device, and that state persists
+            // even after hiding the window, so subsequent clipboard reads
+            // reuse the existing connection with zero transient surfaces.
+            if WindowController::ensure_main_window(&app_handle).is_none() {
+                eprintln!("[Setup] FATAL: Failed to create main window");
+            }
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.show();
+                if start_in_background_clone {
+                    // In background mode, brief show then hide.
+                    // The wl_data_device activation persists after hiding.
+                    let handle = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                        if let Some(w) = handle.get_webview_window("main") {
+                            let _ = w.hide();
+                        }
+                    });
                 }
-            } else {
-                println!("[Setup] Background mode: deferring main window creation");
+                // In non-background mode the window stays visible.
             }
 
             // Auto-migrate old autostart entries to use the wrapper script
@@ -965,28 +1001,95 @@ fn main() {
 
             let (icon, use_template_icon) = theme_manager::initial_tray_icon(&settings);
 
-            let _tray = TrayIconBuilder::with_id("main-tray")
-                .icon(icon)
-                .icon_as_template(use_template_icon)
-                .tooltip("Clipboard History")
-                .temp_dir_path(temp_dir)
-                .menu(&menu)
-                .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "quit" => app.exit(0),
-                    "show" => WindowController::toggle(app),
-                    "settings" => SettingsController::show(app),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        ..
-                    } = event
-                    {
-                        WindowController::toggle(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+            // In background mode, defer tray icon creation to avoid a GDK
+            // surface during compositor startup.  libappindicator (used by
+            // TrayIconBuilder on Linux) registers a StatusNotifierItem that
+            // the GNOME Shell AppIndicator extension renders as a small tray
+            // widget.  If this widget is created before Mutter has fully
+            // initialised its window-stacking state, Mutter hits:
+            //   meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed
+            // and the taskbar icon enters a blink loop.
+            //
+            // Deferring tray creation by 3 s lets Mutter finish its startup
+            // stacking bookkeeping uninterrupted.  GTK operations (MenuItem,
+            // Menu, TrayIconBuilder) must run on the main thread, so we
+            // dispatch them via AppHandle::run_on_main_thread.
+            if start_in_background_clone {
+                println!("[Setup] Background mode: deferring tray icon creation by 3 s");
+                let handle_for_tray = app_handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(3));
+                    let handle = handle_for_tray.clone();
+                    let _ = handle_for_tray.run_on_main_thread(move || {
+                        let show = MenuItem::with_id(
+                            &handle,
+                            "show",
+                            "Show Clipboard",
+                            true,
+                            None::<&str>,
+                        )
+                        .expect("Failed to create Show menu item");
+                        let settings =
+                            MenuItem::with_id(&handle, "settings", "Settings", true, None::<&str>)
+                                .expect("Failed to create Settings menu item");
+                        let quit = MenuItem::with_id(&handle, "quit", "Quit", true, None::<&str>)
+                            .expect("Failed to create Quit menu item");
+                        let menu = Menu::with_items(&handle, &[&show, &settings, &quit])
+                            .expect("Failed to build tray menu");
+                        let temp_dir = std::env::temp_dir().join("clip-win");
+                        std::fs::create_dir_all(&temp_dir).ok();
+                        let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))
+                            .expect("Failed to load tray icon");
+                        let _tray = TrayIconBuilder::with_id("main-tray")
+                            .icon(icon)
+                            .icon_as_template(false)
+                            .tooltip("Clipboard History")
+                            .temp_dir_path(temp_dir)
+                            .menu(&menu)
+                            .on_menu_event(move |app, event| match event.id.as_ref() {
+                                "quit" => app.exit(0),
+                                "show" => WindowController::toggle(app),
+                                "settings" => SettingsController::show(app),
+                                _ => {}
+                            })
+                            .on_tray_icon_event(|tray, event| {
+                                if let TrayIconEvent::Click {
+                                    button: MouseButton::Left,
+                                    ..
+                                } = event
+                                {
+                                    WindowController::toggle(tray.app_handle());
+                                }
+                            })
+                            .build(&handle)
+                            .expect("Failed to create tray icon (deferred)");
+                        println!("[Tray] Deferred tray icon created");
+                    });
+                });
+            } else {
+                let _tray = TrayIconBuilder::with_id("main-tray")
+                    .icon(icon)
+                    .icon_as_template(use_template_icon)
+                    .tooltip("Clipboard History")
+                    .temp_dir_path(temp_dir)
+                    .menu(&menu)
+                    .on_menu_event(move |app, event| match event.id.as_ref() {
+                        "quit" => app.exit(0),
+                        "show" => WindowController::toggle(app),
+                        "settings" => SettingsController::show(app),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            ..
+                        } = event
+                        {
+                            WindowController::toggle(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
+            }
 
             // Update icon asynchronously if dynamic is enabled (to fix the initial default icon)
             if settings.enable_dynamic_tray_icon {
@@ -997,15 +1100,15 @@ fn main() {
                 });
             }
 
-            // Verify that settings window was created from config
-            if app.get_webview_window("settings").is_none() {
-                eprintln!("[Setup] FATAL: Settings window missing from config");
-            } else {
-                println!("[Setup] Settings window created successfully from config");
-            }
+            // Setup and settings windows are no longer defined in tauri.conf.json
+            // to prevent Mutter from managing hidden GDK surfaces at startup
+            // (which triggers meta_window_set_stack_position_no_sync assertions).
+            // They are created on demand:
+            //   - Settings: by SettingsController::show()
+            //   - Setup: by the frontend if first run, or on demand
 
             // Window event handlers are set up by ensure_main_window() when
-            // the main window is created (either here or lazily on first toggle).
+            // the main window is created (here at startup, hidden initially).
 
             start_clipboard_watcher(app_handle.clone(), clipboard_manager.clone());
 
@@ -1036,13 +1139,10 @@ fn main() {
                 });
             }
 
-            // No background enforcer: the main window is only created when
-            // ensure_main_window() is called (lazily on first toggle during
-            // background mode, or eagerly in the !start_in_background_clone
-            // branch above).  This avoids Mutter managing a hidden GDK
-            // surface during startup, which triggered the
-            // meta_window_set_stack_position_no_sync assertion and the
-            // taskbar-icon blink.
+            // No background enforcer: the main window is always created at
+            // startup (hidden initially) to establish the Wayland wl_data_device
+            // connection for the clipboard watcher. It stays hidden until
+            // ensure_main_window() is called on first toggle.
 
             Ok(())
         })
