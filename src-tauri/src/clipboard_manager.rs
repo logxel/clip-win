@@ -501,17 +501,50 @@ impl ClipboardManager {
     /// connections — unlike `wl-paste` which spawns transient
     /// `wl_surface` objects that trigger Mutter assertions.
     ///
+    /// Uses raw FFI to bypass gtk-rs's `assert_initialized_main_thread!()`
+    /// guard — this function is called from the clipboard watcher thread,
+    /// not the main thread. The raw `gtk_clipboard_wait_for_text()` creates
+    /// a nested `GMainContext` iteration internally which processes pending
+    /// events, so clipboard IPC works even from a background thread.
+    ///
     /// Returns `None` if GTK is not initialized, clipboard is empty,
-    /// or the read times out.
+    /// or the read fails.
     #[cfg(target_os = "linux")]
     fn get_text_via_gtk(&self) -> Option<String> {
-        // `init()` is a no-op if GTK was already initialized by
-        // Tauri/WebKitGTK; returns Err only if initialization fails
-        // (headless, missing libs, etc.).
-        gtk::init().ok()?;
+        use std::ffi::CStr;
 
-        let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
-        clipboard.wait_for_text().map(|s| s.to_string())
+        unsafe {
+            // Check if GTK was already initialized by Tauri/WebKitGTK.
+            // Raw FFI avoids the thread-safety panic in gtk-rs wrappers.
+            // Use gtk_init with null args to check without re-initializing.
+            // gtk_init_check returns TRUE if already initialized.
+            if gtk::ffi::gtk_init_check(std::ptr::null_mut(), std::ptr::null_mut()) == 0 {
+                return None;
+            }
+
+            // GDK_SELECTION_CLIPBOARD is the "CLIPBOARD" atom.
+            let atom = gtk::gdk::ffi::gdk_atom_intern(
+                c"CLIPBOARD".as_ptr(),
+                0, // only_if_exists = FALSE
+            );
+
+            let clipboard = gtk::ffi::gtk_clipboard_get(atom);
+            if clipboard.is_null() {
+                return None;
+            }
+
+            // Blocks until clipboard text is available. Internally runs
+            // g_main_context_iteration() to process pending IPC events.
+            let text_ptr = gtk::ffi::gtk_clipboard_wait_for_text(clipboard);
+            if text_ptr.is_null() {
+                return None;
+            }
+
+            let text = CStr::from_ptr(text_ptr).to_string_lossy().into_owned();
+            gtk::glib::ffi::g_free(text_ptr as *mut _);
+
+            Some(text)
+        }
     }
 
     #[cfg(target_os = "linux")]
