@@ -924,17 +924,13 @@ fn main() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
-            // If not started in background mode, create the main window now.
-            // In background mode, the window is created lazily on first user
-            // toggle to avoid Mutter managing a hidden GDK surface during
-            // startup (which triggers meta_window_set_stack_position_no_sync
-            // assertions and a taskbar-icon blink).
-            if !start_in_background_clone {
-                if WindowController::ensure_main_window(&app_handle).is_none() {
-                    eprintln!("[Setup] FATAL: Failed to create main window");
-                }
-            } else {
-                println!("[Setup] Background mode: deferring main window creation");
+            // Create the main window now (always hidden initially).
+            // In background mode the window stays hidden until the user
+            // toggles it, but creating it early establishes the Wayland
+            // wl_data_device connection so the clipboard watcher can read
+            // the clipboard without spawning transient surfaces.
+            if WindowController::ensure_main_window(&app_handle).is_none() {
+                eprintln!("[Setup] FATAL: Failed to create main window");
             }
 
             // Auto-migrate old autostart entries to use the wrapper script
@@ -1070,7 +1066,7 @@ fn main() {
             //   - Setup: by the frontend if first run, or on demand
 
             // Window event handlers are set up by ensure_main_window() when
-            // the main window is created (either here or lazily on first toggle).
+            // the main window is created (here at startup, hidden initially).
 
             start_clipboard_watcher(app_handle.clone(), clipboard_manager.clone());
 
@@ -1101,13 +1097,10 @@ fn main() {
                 });
             }
 
-            // No background enforcer: the main window is only created when
-            // ensure_main_window() is called (lazily on first toggle during
-            // background mode, or eagerly in the !start_in_background_clone
-            // branch above).  This avoids Mutter managing a hidden GDK
-            // surface during startup, which triggered the
-            // meta_window_set_stack_position_no_sync assertion and the
-            // taskbar-icon blink.
+            // No background enforcer: the main window is always created at
+            // startup (hidden initially) to establish the Wayland wl_data_device
+            // connection for the clipboard watcher. It stays hidden until
+            // ensure_main_window() is called on first toggle.
 
             Ok(())
         })
