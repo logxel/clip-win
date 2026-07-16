@@ -26,6 +26,7 @@ const WL_COPY_SETTLE_TIME: u64 = 150;
 
 // arboard retry & log-rate-limit intervals (tunable without touching logic).
 const ARBOARD_RETRY_INTERVAL: Duration = Duration::from_secs(120);
+const WAYLAND_RETRY_INTERVAL: Duration = Duration::from_secs(120);
 const LOG_INTERVAL: Duration = Duration::from_secs(30);
 
 // --- Helper Functions ---
@@ -218,12 +219,19 @@ pub struct ClipboardManager {
     last_error_log: Option<Instant>,
     /// When we last retried arboard initialisation (for transient failures).
     last_clipboard_retry: Option<Instant>,
+    /// When we last retried Wayland clipboard initialisation.
+    last_wayland_retry: Option<Instant>,
     /// Long-lived arboard Clipboard connection (per arboard docs).
     ///
     /// `None` means arboard could not be initialised (e.g. Wayland compositor
     /// lacks wlr-data-control). We skip arboard entirely and use external
     /// tools (wl-copy/wl-paste/xclip) instead.
     clipboard: Option<Clipboard>,
+    /// Native Wayland clipboard backend using ext_data_control_v1 protocol.
+    /// Only initialized on Wayland compositors that support the protocol.
+    /// Provides clipboard access without creating transient wl_surfaces.
+    #[cfg(target_os = "linux")]
+    wayland_clipboard: Option<crate::wayland_clipboard::WaylandClipboard>,
 }
 
 impl ClipboardManager {
@@ -265,6 +273,27 @@ impl ClipboardManager {
     pub fn new(persistence_path: PathBuf, max_history_size: usize) -> Self {
         // Normalize the requested max size and avoid huge allocations
         let max_size = Self::clamp_max_history_size(max_history_size);
+
+        // Initialize Wayland clipboard backend if on Wayland with protocol support
+        #[cfg(target_os = "linux")]
+        let wayland_clipboard = {
+            if crate::session::is_wayland() {
+                let wl_clipboard = crate::wayland_clipboard::WaylandClipboard::new();
+                if wl_clipboard.is_some() {
+                    println!(
+                        "[ClipboardManager] Native Wayland clipboard (ext_data_control) initialized"
+                    );
+                } else {
+                    println!(
+                        "[ClipboardManager] ext_data_control not available, falling back to GTK"
+                    );
+                }
+                wl_clipboard
+            } else {
+                None
+            }
+        };
+
         let mut manager = Self {
             history: Vec::with_capacity(max_size),
             last_pasted_text: None,
@@ -275,7 +304,10 @@ impl ClipboardManager {
             clipboard_server: Mutex::new(None),
             last_error_log: None,
             last_clipboard_retry: None,
+            last_wayland_retry: None,
             clipboard: init_clipboard(),
+            #[cfg(target_os = "linux")]
+            wayland_clipboard,
         };
         manager.load_history();
         manager
@@ -383,6 +415,36 @@ impl ClipboardManager {
         // Retry arboard init periodically — the compositor may have gained
         // wlr-data-control support since startup (e.g. compositor switch).
         self.retry_clipboard_init();
+        // Retry Wayland clipboard init periodically
+        #[cfg(target_os = "linux")]
+        self.retry_wayland_init();
+
+        // Try native Wayland clipboard first (ext_data_control_v1 protocol)
+        // This avoids creating transient wl_surfaces that trigger Mutter blinking
+        #[cfg(target_os = "linux")]
+        if crate::session::is_wayland() {
+            if let Some(ref mut wayland_clipboard) = self.wayland_clipboard {
+                match wayland_clipboard.get_text() {
+                    Ok(Some(text)) if !text.is_empty() => {
+                        self.last_error_log = None;
+                        return Ok(text);
+                    }
+                    Ok(Some(_)) | Ok(None) => {
+                        // Empty clipboard is normal on Wayland -- return empty string
+                        // instead of Err to avoid triggering unnecessary GTK fallback.
+                        self.last_error_log = None;
+                        return Ok(String::new());
+                    }
+                    Err(e) => {
+                        self.log_error_rate_limited(&format!(
+                            "Wayland clipboard read failed: {}",
+                            e
+                        ));
+                        // Fall through to GTK path if available
+                    }
+                }
+            }
+        }
 
         if let Some(ref mut clipboard) = self.clipboard {
             match clipboard.get_text() {
@@ -434,6 +496,34 @@ impl ClipboardManager {
         if let Ok(cb) = Clipboard::new() {
             println!("[ClipboardManager] Acquired clipboard connection (was unavailable)");
             self.clipboard = Some(cb);
+        }
+    }
+
+    /// Periodically retry Wayland clipboard initialisation when it was `None`
+    /// at startup (e.g. compositor didn't support ext_data_control_manager_v1).
+    /// Also handles runtime failures where the compositor gained support later
+    /// (e.g. compositor hot-swap, session switch).
+    #[cfg(target_os = "linux")]
+    fn retry_wayland_init(&mut self) {
+        if self.wayland_clipboard.is_some() {
+            return;
+        }
+        if !crate::session::is_wayland() {
+            return;
+        }
+        if self
+            .last_wayland_retry
+            .is_some_and(|t| t.elapsed() < WAYLAND_RETRY_INTERVAL)
+        {
+            return;
+        }
+        self.last_wayland_retry = Some(Instant::now());
+
+        if let Some(wl) = crate::wayland_clipboard::WaylandClipboard::new() {
+            println!(
+                "[ClipboardManager] Acquired Wayland clipboard connection (ext_data_control — was unavailable)"
+            );
+            self.wayland_clipboard = Some(wl);
         }
     }
 
@@ -533,9 +623,38 @@ impl ClipboardManager {
 
     /// Try to get HTML content from clipboard. Returns None if not available.
     ///
-    /// Calls `retry_clipboard_init` so HTML reads benefit from the same
-    /// periodic arboard retry logic as `get_current_text`.
+    /// On Wayland, uses the native `ext_data_control_v1` backend first.
+    /// Falls back to arboard on X11 / non-Wayland.
     pub fn get_current_html(&mut self) -> Option<String> {
+        // Retry Wayland clipboard init periodically
+        #[cfg(target_os = "linux")]
+        self.retry_wayland_init();
+
+        // Try native Wayland clipboard first (ext_data_control_v1 protocol)
+        #[cfg(target_os = "linux")]
+        if crate::session::is_wayland() {
+            if let Some(ref mut wayland_clipboard) = self.wayland_clipboard {
+                match wayland_clipboard.get_html() {
+                    Ok(Some(html)) if !html.is_empty() => {
+                        self.last_error_log = None;
+                        return Some(html);
+                    }
+                    Ok(Some(_)) | Ok(None) => {
+                        // No HTML content — that's fine, return None
+                        return None;
+                    }
+                    Err(e) => {
+                        self.log_error_rate_limited(&format!(
+                            "Wayland HTML read failed: {}",
+                            e
+                        ));
+                        // Fall through to arboard path
+                    }
+                }
+            }
+        }
+
+        // Fallback: arboard
         self.retry_clipboard_init();
         self.clipboard.as_mut()?.get().html().ok()
     }
@@ -543,6 +662,58 @@ impl ClipboardManager {
     pub fn get_current_image(
         &mut self,
     ) -> Result<Option<(ImageData<'static>, u64)>, arboard::Error> {
+        // Retry Wayland clipboard init periodically
+        #[cfg(target_os = "linux")]
+        self.retry_wayland_init();
+
+        // Try native Wayland clipboard first (ext_data_control_v1 protocol)
+        // This avoids creating transient wl_surfaces that trigger Mutter blinking
+        #[cfg(target_os = "linux")]
+        if crate::session::is_wayland() {
+            if let Some(ref mut wayland_clipboard) = self.wayland_clipboard {
+                // First, get the raw bytes -- drop the borrow before decoding
+                let raw_result = wayland_clipboard.get_image();
+                match raw_result {
+                    Ok(Some(bytes)) => {
+                        let hash = calculate_hash(&bytes);
+                        // Decode the raw image bytes to get width/height
+                        // NOTE: decode happens after releasing wayland_clipboard borrow,
+                        // but the Mutex is still held by the caller. The decode is
+                        // unavoidable in the current sync architecture, but at least
+                        // we're not holding two borrows simultaneously.
+                        match image::load_from_memory(&bytes) {
+                            Ok(img) => {
+                                let (width, height) = (img.width() as usize, img.height() as usize);
+                                let owned = ImageData {
+                                    width,
+                                    height,
+                                    bytes: bytes.into(),
+                                };
+                                return Ok(Some((owned, hash)));
+                            }
+                            Err(e) => {
+                                self.log_error_rate_limited(&format!(
+                                    "Failed to decode Wayland image: {}",
+                                    e
+                                ));
+                                // Fall through to arboard path
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        // Empty clipboard is normal on Wayland
+                    }
+                    Err(e) => {
+                        self.log_error_rate_limited(&format!(
+                            "Wayland image read failed: {}",
+                            e
+                        ));
+                        // Fall through to arboard path
+                    }
+                }
+            }
+        }
+
         let clipboard = match self.clipboard.as_mut() {
             Some(cb) => cb,
             None => return Ok(None),
@@ -935,6 +1106,14 @@ impl ClipboardManager {
         #[cfg(target_os = "linux")]
         {
             if crate::session::is_wayland() {
+                // Try native Wayland ext_data_control_v1 first — avoids transient
+                // wl_surfaces that cause Mutter taskbar blinking
+                if let Some(ref mut wayland_clipboard) = self.wayland_clipboard {
+                    if wayland_clipboard.set_text(text).is_ok() {
+                        return Ok(());
+                    }
+                    // Native backend failed — fall through to wl-copy
+                }
                 if let Ok(()) = self.set_clipboard_external(
                     "wl-copy",
                     &["--type", "text/plain;charset=utf-8"],
@@ -972,6 +1151,14 @@ impl ClipboardManager {
         #[cfg(target_os = "linux")]
         {
             if crate::session::is_wayland() {
+                // Try native Wayland ext_data_control_v1 first — avoids transient
+                // wl_surfaces that cause Mutter taskbar blinking
+                if let Some(ref mut wayland_clipboard) = self.wayland_clipboard {
+                    if wayland_clipboard.set_html(html).is_ok() {
+                        return Ok(());
+                    }
+                    // Native backend failed — fall through to wl-copy
+                }
                 if let Ok(()) =
                     self.set_clipboard_external("wl-copy", &["--type", "text/html"], html)
                 {
@@ -1496,5 +1683,37 @@ mod tests {
         let m = make_manager("drop", 10);
         assert_eq!(m.get_max_history_size(), 10);
         drop(m);
+    }
+
+    // --- Pure logic tests (no display server) ---
+
+    #[test]
+    fn test_clamp_max_history_size_edge_cases() {
+        assert_eq!(ClipboardManager::clamp_max_history_size(0), DEFAULT_MAX_HISTORY_SIZE);
+        assert_eq!(ClipboardManager::clamp_max_history_size(1), 1);
+        assert_eq!(ClipboardManager::clamp_max_history_size(100_000), 100_000);
+        assert_eq!(ClipboardManager::clamp_max_history_size(100_001), 100_000);
+    }
+
+    #[test]
+    fn test_calculate_hash_stable() {
+        let a = calculate_hash(&"hello world");
+        let b = calculate_hash(&"hello world");
+        assert_eq!(a, b);
+
+        let c = calculate_hash(&"different");
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_clipboard_item_preview_truncation() {
+        let short = "short";
+        let item = ClipboardItem::new_text(short.into());
+        assert_eq!(item.preview, "short");
+
+        let long = "a".repeat(150);
+        let item = ClipboardItem::new_text(long.clone());
+        assert_eq!(item.preview.len(), 103); // 100 chars + "..."
+        assert!(item.preview.ends_with("..."));
     }
 }

@@ -670,8 +670,46 @@ fn start_clipboard_watcher(app: AppHandle, clipboard_manager: Arc<Mutex<Clipboar
                 }
             }
 
-            // Text
-            if let Ok(text) = manager.get_current_text() {
+            // Text — on Wayland, the native ext_data_control backend (if available)
+            // handles clipboard reads directly without creating transient surfaces.
+            // Falls back to GTK on main thread if ext_data_control not available.
+            // Never fall back to wl-paste on Wayland — it creates transient surfaces
+            // that trigger meta_window_set_stack_position_no_sync and blinking.
+            #[cfg(target_os = "linux")]
+            let text_result = {
+                if is_wayland() {
+                    // Try native Wayland clipboard first (ext_data_control_v1)
+                    // This works from any thread without main-thread dispatch
+                    match manager.get_current_text() {
+                        Ok(text) if !text.is_empty() => Ok(text),
+                        // If native backend failed or clipboard empty, try GTK fallback
+                        _ => {
+                            // Dispatch GTK clipboard read to the main thread where
+                            // g_main_context_iteration() can process Wayland events.
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            let handle = app.clone();
+                            let _ = handle.run_on_main_thread(move || {
+                                let text = ClipboardManager::get_text_via_gtk();
+                                let _ = tx.send(text);
+                            });
+                            match rx.recv_timeout(Duration::from_millis(500)) {
+                                Ok(Some(text)) if !text.is_empty() => Ok(text),
+                                // On Wayland, never fall back to wl-paste — it creates
+                                // transient surfaces that trigger meta_window_set_stack_position_no_sync.
+                                // After wl_data_device activation (window shown at startup),
+                                // GTK reads work directly. Empty means empty clipboard.
+                                _ => Err(arboard::Error::ContentNotAvailable),
+                            }
+                        }
+                    }
+                } else {
+                    manager.get_current_text()
+                }
+            };
+            #[cfg(not(target_os = "linux"))]
+            let text_result = manager.get_current_text();
+
+            if let Ok(text) = text_result {
                 if !text.is_empty() {
                     let text_hash = clip_win::clipboard_manager::calculate_hash(&text);
 
