@@ -27,6 +27,10 @@ tauri-plugin-shell = "2"
 # Clipboard Management - wayland-data-control for native Wayland support
 arboard = { version = "3.4", features = ["image-data", "wayland-data-control"] }
 
+# Wayland native clipboard support (ext_data_control protocol)
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+
 # Async Runtime
 tokio = { version = "1.52.2", features = ["full"] }
 
