@@ -30,18 +30,7 @@ use tauri::{
 /// This is used to block the initial window show
 static STARTED_IN_BACKGROUND: AtomicBool = AtomicBool::new(false);
 
-/// Global flag indicating whether the initial show is allowed
-/// While false, background mode will still hide the window on focus
-/// After the first user toggle, this is set to true to allow normal show/hide behavior
-static INITIAL_SHOW_ALLOWED: AtomicBool = AtomicBool::new(false);
 
-/// Returns true while the app is in background-startup mode — started with
-/// --background and no user-initiated toggle has occurred yet.
-/// During this window both Focused(true) and Focused(false) handlers must
-/// avoid interacting with the window to prevent a Mutter blink loop.
-fn is_background_startup() -> bool {
-    STARTED_IN_BACKGROUND.load(Ordering::Relaxed) && !INITIAL_SHOW_ALLOWED.load(Ordering::Relaxed)
-}
 
 /// Application state shared across all handlers
 pub struct AppState {
@@ -299,10 +288,7 @@ async fn finish_setup(app: AppHandle) -> Result<(), String> {
         let _ = setup_window.close();
     }
 
-    // 3. Allow window to be shown (user explicitly chose "Start Using")
-    INITIAL_SHOW_ALLOWED.store(true, Ordering::Relaxed);
-
-    // 4. Show main window
+    // 3. Show main window
     if let Some(main_window) = WindowController::ensure_main_window(&app) {
         // Ensure it's ready to be shown
         WindowController::position_and_show(&main_window, &app);
@@ -354,11 +340,6 @@ impl WindowController {
     /// Toggle window visibility with optional tab selection
     /// If tab is Some("emoji"), it will emit an event to switch to the emoji tab
     pub fn toggle_with_tab(app: &AppHandle, tab: Option<&str>) {
-        // User-initiated toggle - mark that we're now allowing shows
-        if STARTED_IN_BACKGROUND.load(Ordering::Relaxed) {
-            INITIAL_SHOW_ALLOWED.store(true, Ordering::Relaxed);
-        }
-
         if let Some(window) = Self::ensure_main_window(app) {
             if window.is_visible().unwrap_or(false) {
                 // If window is visible, emit tab switch event if tab is specified
@@ -417,7 +398,6 @@ impl WindowController {
             .decorations(false)
             .transparent(true)
             .visible(false)
-            .skip_taskbar(true)
             .build();
 
         let window = match window {
@@ -433,23 +413,12 @@ impl WindowController {
 
         window.on_window_event(move |event| match event {
             WindowEvent::Focused(true) => {
-                if is_background_startup() {
-                    println!(
-                        "[WindowController] Background mode: intercepted focus, hiding window"
-                    );
+                if STARTED_IN_BACKGROUND.load(Ordering::SeqCst) {
+                    println!("[WindowController] Background mode: hiding window");
                     let _ = w_clone.hide();
                 }
             }
             WindowEvent::Focused(false) => {
-                // During background startup, ignore focus-loss events entirely.
-                // The window isn't meant to be visible, and hiding it here
-                // triggers Mutter's stack-position management on an unmapped
-                // window, causing meta_window_set_stack_position_no_sync
-                // assertion failures and a focus→hide→refocus blink loop.
-                if is_background_startup() {
-                    return;
-                }
-
                 let state = w_clone.state::<AppState>();
                 if state.is_mouse_inside.load(Ordering::Relaxed) {
                     return;
@@ -497,11 +466,6 @@ impl WindowController {
         } else {
             Self::position_for_non_wayland(window);
         }
-
-        // The window is born with skip_taskbar(true) to prevent Mutter
-        // taskbar blink during background startup. Restore normal taskbar
-        // presence now that the user has explicitly requested visibility.
-        let _ = window.set_skip_taskbar(false);
 
         let is_wayland_session = is_wayland();
 
@@ -684,7 +648,6 @@ impl SettingsController {
     pub fn show(app: &AppHandle) {
         match app.get_webview_window("settings") {
             Some(window) => {
-                let _ = window.set_skip_taskbar(false);
                 let _ = window.show();
                 let _ = window.set_focus();
             }
