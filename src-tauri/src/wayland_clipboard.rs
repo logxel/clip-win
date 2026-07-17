@@ -294,7 +294,6 @@ impl Dispatch<ExtDataControlOfferV1, ()> for WaylandState {
                 if let Some(fd) = Self::queue_receive(offer, &mime_type) {
                     state.image_read_fd = Some(fd);
                 }
-                return;
             }
         }
     }
@@ -796,8 +795,10 @@ mod tests {
 
     #[test]
     fn test_selection_clear_clears_all_content() {
-        let mut state = WaylandState::default();
-        state.clipboard_text = Some("text".into());
+        let mut state = WaylandState {
+            clipboard_text: Some("text".into()),
+            ..Default::default()
+        };
         state.clipboard_html = Some("<p>html</p>".into());
         state.clipboard_image = Some(vec![1, 2, 3]);
 

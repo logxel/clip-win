@@ -621,6 +621,41 @@ impl ClipboardManager {
         None
     }
 
+    /// Read clipboard text via direct GTK FFI without creating transient surfaces.
+    ///
+    /// This avoids the surface-creation side effect of `wl-paste` which
+    /// triggers Mutter `meta_window_set_stack_position_no_sync` assertions.
+    /// Must be called from the main thread where GTK was initialised by Tauri.
+    pub fn get_text_via_gtk() -> Option<String> {
+        use std::ffi::CStr;
+
+        unsafe {
+            if gtk::ffi::gtk_init_check(std::ptr::null_mut(), std::ptr::null_mut()) == 0 {
+                return None;
+            }
+
+            let atom = gtk::gdk::ffi::gdk_atom_intern(
+                c"CLIPBOARD".as_ptr(),
+                0, // only_if_exists = FALSE
+            );
+
+            let clipboard = gtk::ffi::gtk_clipboard_get(atom);
+            if clipboard.is_null() {
+                return None;
+            }
+
+            let text_ptr = gtk::ffi::gtk_clipboard_wait_for_text(clipboard);
+            if text_ptr.is_null() {
+                return None;
+            }
+
+            let text = CStr::from_ptr(text_ptr).to_string_lossy().into_owned();
+            gtk::glib::ffi::g_free(text_ptr as *mut _);
+
+            Some(text)
+        }
+    }
+
     /// Try to get HTML content from clipboard. Returns None if not available.
     ///
     /// On Wayland, uses the native `ext_data_control_v1` backend first.
